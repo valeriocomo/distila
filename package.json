@@ -1,0 +1,14 @@
+{
+  "name": "distila",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Distila: on-device article summarizer for Chromium browsers.",
+  "scripts": {
+    "sync-version": "node scripts/sync-version.js",
+    "build": "node scripts/build-zip.js",
+    "version": "npm run sync-version && git add src/manifest.json"
+  },
+  "devDependencies": {
+    "archiver": "^7.0.1"
+  }
+}

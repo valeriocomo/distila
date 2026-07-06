@@ -1,0 +1,25 @@
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0E4A52"/>
+      <stop offset="100%" stop-color="#0A2F3A"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="128" height="128" rx="26" fill="url(#bg)"/>
+
+  <text x="50" y="93"
+        font-family="Poppins"
+        font-weight="700"
+        font-size="92"
+        fill="#F4EFE3"
+        text-anchor="middle">D</text>
+
+  <!-- signature element: a single amber drop, nodding to "distillation" -->
+  <path d="M 96 78
+           C 96 84.5 90.8 89.6 84.5 89.6
+           C 78.2 89.6 73 84.5 73 78
+           C 73 71 84.5 57 84.5 57
+           C 84.5 57 96 71 96 78 Z"
+        fill="#F2A65A"/>
+</svg>

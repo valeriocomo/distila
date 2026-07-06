@@ -1,0 +1,20 @@
+{
+	"name": "Distila",
+	"image": "mcr.microsoft.com/devcontainers/javascript-node:4-24-trixie",
+	"postCreateCommand": "npm i",
+	"features": {
+		"ghcr.io/devcontainers/features/github-cli:1": {
+			"installDirectlyFromGitHubRelease": true,
+			"version": "latest"
+		}
+	},
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"anthropic.claude-code",
+				"github.vscode-github-actions",
+				"github.vscode-pull-request-github"
+			]
+		}
+	}
+}

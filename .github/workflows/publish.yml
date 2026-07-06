@@ -1,0 +1,107 @@
+name: Publish Extension
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  # ────────────────────────────────────────────────────────────
+  # 1. Build: a single versioned zip, shared by the two publish
+  #    jobs via upload-artifact/download-artifact
+  # ────────────────────────────────────────────────────────────
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          # Tag e.g. "v1.2.3" -> "1.2.3"
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Set package.json version to match the tag
+        run: npm pkg set version="${{ steps.version.outputs.version }}"
+
+      - name: Sync version into manifest.json
+        run: npm run sync-version
+
+      - name: Build extension zip
+        run: npm run build
+
+      - name: Upload zip as shared artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension-package
+          path: extension.zip
+
+  # ────────────────────────────────────────────────────────────
+  # 2. Publish to Chrome Web Store
+  # ────────────────────────────────────────────────────────────
+  publish-chrome:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download zip
+        uses: actions/download-artifact@v4
+        with:
+          name: extension-package
+
+      - name: Install chrome-webstore-upload-cli
+        run: npm install -g chrome-webstore-upload-cli
+
+      - name: Upload to Chrome Web Store
+        env:
+          EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+          PUBLISHER_ID: ${{ secrets.CHROME_PUBLISHER_ID }}
+          CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+        run: |
+          chrome-webstore-upload upload \
+            --source extension.zip \
+            --extension-id "$EXTENSION_ID"
+
+      - name: Publish to Chrome Web Store
+        env:
+          EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+          PUBLISHER_ID: ${{ secrets.CHROME_PUBLISHER_ID }}
+          CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+        run: |
+          chrome-webstore-upload publish \
+            --extension-id "$EXTENSION_ID"
+
+  # ────────────────────────────────────────────────────────────
+  # 3. Publish to Microsoft Edge Add-ons
+  #    Requires that the first submission has already been done
+  #    manually from Partner Center (the Product ID is needed).
+  # ────────────────────────────────────────────────────────────
+  publish-edge:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download zip
+        uses: actions/download-artifact@v4
+        with:
+          name: extension-package
+
+      - name: Upload and publish to Edge Add-ons
+        uses: wdzeng/edge-addon@v2
+        with:
+          product-id: ${{ secrets.EDGE_PRODUCT_ID }}
+          zip-path: extension.zip
+          api-key: ${{ secrets.EDGE_API_KEY }}
+          client-id: ${{ secrets.EDGE_CLIENT_ID }}

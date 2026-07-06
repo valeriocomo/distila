@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Distila</title>
+<style>
+  :root {
+    color-scheme: light dark;
+  }
+  body {
+    width: 360px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 12px;
+    margin: 0;
+  }
+  h1 {
+    font-size: 15px;
+    margin: 0 0 10px;
+  }
+  .row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  select {
+    flex: 1;
+    padding: 4px;
+    font-size: 12px;
+  }
+  button {
+    width: 100%;
+    padding: 8px;
+    font-size: 13px;
+    border: none;
+    border-radius: 6px;
+    background: #1a73e8;
+    color: white;
+    cursor: pointer;
+  }
+  button:disabled {
+    background: #9aa0a6;
+    cursor: default;
+  }
+  #copyBtn {
+    background: #34a853;
+    margin-top: 8px;
+    display: none;
+  }
+  #status {
+    font-size: 12px;
+    color: #555;
+    margin: 8px 0;
+    min-height: 16px;
+  }
+  #output {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 160px;
+    max-height: 320px;
+    overflow-y: auto;
+    padding: 8px;
+    font-size: 13px;
+    line-height: 1.4;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    white-space: pre-wrap;
+    background: rgba(0,0,0,0.02);
+  }
+</style>
+</head>
+<body>
+  <h1>Distila</h1>
+
+  <div class="row">
+    <select id="typeSelect">
+      <option value="key-points" selected>Key points</option>
+      <option value="tldr">TL;DR</option>
+    </select>
+    <select id="lengthSelect">
+      <option value="short" selected>Short</option>
+      <option value="medium">Medium</option>
+      <option value="long">Long</option>
+    </select>
+  </div>
+
+  <button id="summarizeBtn">Summarize article</button>
+  <div id="status"></div>
+  <div id="output"></div>
+  <button id="copyBtn">Copy summary</button>
+
+  <script src="popup.js"></script>
+</body>
+</html>

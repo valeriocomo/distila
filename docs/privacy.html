@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Distila — Privacy Policy</title>
+<link rel="icon" type="image/png" href="icon128.png">
+<style>
+  :root {
+    --ink: #0A2F3A;
+    --teal: #0E4A52;
+    --amber: #F2A65A;
+    --paper: #FBFAF7;
+    --text: #1C2B2E;
+    --muted: #5B6B6E;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.6;
+  }
+  header {
+    background: linear-gradient(135deg, var(--teal), var(--ink));
+    padding: 48px 24px 40px;
+    color: #F4EFE3;
+  }
+  header .inner {
+    max-width: 680px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  header img {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    flex-shrink: 0;
+  }
+  header h1 {
+    font-size: 22px;
+    margin: 0;
+  }
+  header p {
+    margin: 4px 0 0;
+    font-size: 14px;
+    opacity: 0.8;
+  }
+  main {
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 40px 24px 80px;
+  }
+  h2 {
+    font-size: 17px;
+    margin: 36px 0 12px;
+    color: var(--teal);
+  }
+  p, li {
+    font-size: 15px;
+    color: var(--text);
+  }
+  ul {
+    padding-left: 20px;
+  }
+  .highlight {
+    background: #F1ECE0;
+    border-left: 3px solid var(--amber);
+    padding: 14px 18px;
+    border-radius: 4px;
+    margin: 20px 0;
+  }
+  a { color: var(--teal); }
+  footer {
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 0 24px 60px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  code {
+    background: #EFEAE0;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="inner">
+    <img src="icon128.png" alt="Distila logo">
+    <div>
+      <h1>Distila — Privacy Policy</h1>
+      <p>Last updated: July 6, 2026</p>
+    </div>
+  </div>
+</header>
+
+<main>
+  <p class="highlight">
+    Distila is designed around a simple principle: your reading never leaves your device.
+    All summarization happens locally in your browser using Chrome's built-in Summarizer API.
+    Distila has no server, collects no data, and does not use analytics or tracking of any kind.
+  </p>
+
+  <h2>What Distila does</h2>
+  <p>
+    Distila is a browser extension that summarizes the article on the web page you are currently
+    viewing. When you click the extension icon and choose to summarize, Distila reads the visible
+    text of that page and generates a summary using an on-device AI model (Gemini Nano, provided
+    by Chrome). The summary is displayed in the extension's popup, and you may optionally copy it
+    to your clipboard.
+  </p>
+
+  <h2>Data we access</h2>
+  <p>
+    Distila requests the following browser permissions, and uses them only as described:
+  </p>
+  <ul>
+    <li>
+      <strong><code>activeTab</code></strong> — grants temporary access to the tab you are viewing,
+      only after you explicitly click the Distila icon. Distila cannot read any tab unless you
+      interact with it first.
+    </li>
+    <li>
+      <strong><code>scripting</code></strong> — allows Distila to extract the readable text content
+      of the current page (for example, the contents of an <code>&lt;article&gt;</code> element) so
+      it can be passed to the summarization model.
+    </li>
+  </ul>
+  <p>
+    Distila does not request access to your browsing history, other open tabs, cookies, passwords,
+    or any data beyond the single page you choose to summarize.
+  </p>
+
+  <h2>Where your data goes</h2>
+  <p>
+    Nowhere outside your device. Summarization is performed entirely on-device using Chrome's
+    built-in Summarizer API. Distila does not operate any backend server, does not transmit page
+    content or summaries over the network, and does not share data with any third party.
+  </p>
+
+  <h2>Data storage and retention</h2>
+  <p>
+    Distila does not store the text of the pages you summarize, nor the summaries it generates.
+    Everything exists only in memory while the popup is open and is discarded when you close it.
+    Distila does not use cookies, local storage, or any persistent tracking mechanism.
+  </p>
+
+  <h2>Clipboard access</h2>
+  <p>
+    When you click "Copy summary," Distila writes the generated summary to your system clipboard
+    using the standard browser Clipboard API. This action only occurs when you explicitly click
+    that button, and only the summary text is copied — nothing else.
+  </p>
+
+  <h2>Third parties</h2>
+  <p>
+    Distila does not integrate with any third-party analytics, advertising, or data-processing
+    service. The only "external" component involved is Chrome's own on-device Gemini Nano model,
+    which is downloaded and managed directly by your browser, not by Distila.
+  </p>
+
+  <h2>Children's privacy</h2>
+  <p>
+    Distila is not directed at children and does not knowingly collect any information from
+    anyone, regardless of age, since it collects no information at all.
+  </p>
+
+  <h2>Changes to this policy</h2>
+  <p>
+    If this policy changes, the updated version will be published at this same URL with a revised
+    "Last updated" date. Continued use of Distila after a change constitutes acceptance of the
+    revised policy.
+  </p>
+
+  <h2>Contact</h2>
+  <p>
+    Questions about this privacy policy or about Distila can be sent to:
+    <a href="mailto:your-email@example.com">your-email@example.com</a>
+  </p>
+</main>
+
+<footer>
+  Distila is an independent browser extension and is not affiliated with Google or Microsoft.
+</footer>
+
+</body>
+</html>

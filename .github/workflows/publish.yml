@@ -90,6 +90,7 @@ jobs:
   #    manually from Partner Center (the Product ID is needed).
   # ────────────────────────────────────────────────────────────
   publish-edge:
+    if: false  # Temporaneamente disabilitato: rimuovere questa riga per riattivare
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -110,7 +111,7 @@ jobs:
   # 4. Create a GitHub Release once both stores are published
   # ────────────────────────────────────────────────────────────
   release:
-    needs: [build, publish-chrome, publish-edge]
+    needs: [build, publish-chrome]  # riaggiungere publish-edge quando viene riattivato
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -5,7 +5,11 @@ const outputEl = document.getElementById('output');
 const typeSelect = document.getElementById('typeSelect');
 const lengthSelect = document.getElementById('lengthSelect');
 
-const CHUNK_SIZE = 3000; // characters, ~750 tokens per Chrome's docs
+// The popup is only a view: the summarization runs in the offscreen document
+// (see offscreen.js) so it survives the popup being closed. The popup renders
+// the job state stored in chrome.storage.session and re-syncs on every open.
+
+let currentTabUrl = null;
 
 function setStatus(msg) {
   statusEl.textContent = msg;
@@ -44,75 +48,45 @@ function extractArticleText() {
   return text;
 }
 
-/**
- * Splits the text into chunks without breaking words/sentences, respecting
- * paragraphs when possible (the "summary of summaries" approach).
- */
-function splitIntoChunks(text, chunkSize = CHUNK_SIZE) {
-  const paragraphs = text.split(/\n+/).filter(p => p.trim().length > 0);
-  const chunks = [];
-  let current = '';
-
-  for (const para of paragraphs) {
-    if (para.length > chunkSize) {
-      // Single paragraph too long: split by sentences
-      const sentences = para.match(/[^.!?]+[.!?]+|\S+$/g) || [para];
-      for (const sentence of sentences) {
-        if ((current + ' ' + sentence).length > chunkSize) {
-          if (current) chunks.push(current.trim());
-          current = sentence;
-        } else {
-          current += ' ' + sentence;
-        }
-      }
-    } else if ((current + '\n' + para).length > chunkSize) {
-      chunks.push(current.trim());
-      current = para;
-    } else {
-      current += '\n' + para;
-    }
+function renderJob(job) {
+  // Ignore jobs belonging to a different page
+  if (!job || job.url !== currentTabUrl) {
+    summarizeBtn.disabled = false;
+    return;
   }
-  if (current.trim()) chunks.push(current.trim());
-  return chunks;
+
+  if (job.status === 'running') {
+    summarizeBtn.disabled = true;
+    copyBtn.style.display = 'none';
+    outputEl.textContent = '';
+    setStatus(job.progress || 'Summarizing...');
+  } else if (job.status === 'done') {
+    summarizeBtn.disabled = false;
+    outputEl.textContent = job.summary;
+    copyBtn.style.display = 'block';
+    setStatus('Done.');
+  } else if (job.status === 'error') {
+    summarizeBtn.disabled = false;
+    copyBtn.style.display = 'none';
+    setStatus(`Error: ${job.message}`);
+  }
 }
 
-/**
- * Summarizes each chunk with "compressed" settings (tldr, plain-text, long)
- * to preserve as much context as possible, then concatenates the results.
- * If the concatenated result is still too long, it repeats recursively
- * (the "summary of summaries" technique described in Chrome's docs).
- */
-async function recursiveSummaryOfSummaries(chunks, onProgress) {
-  const partialSummarizer = await Summarizer.create({
-    type: 'tldr',
-    format: 'plain-text',
-    length: 'long',
-    sharedContext: 'Summarize while keeping the main factual points of the text.',
+async function init() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  currentTabUrl = tab?.url ?? null;
+
+  const { job } = await chrome.storage.session.get('job');
+  renderJob(job);
+
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'session' && changes.job) {
+      renderJob(changes.job.newValue);
+    }
   });
-
-  let summaries = [];
-  for (let i = 0; i < chunks.length; i++) {
-    onProgress(`Summarizing section ${i + 1}/${chunks.length}...`);
-    const summary = await partialSummarizer.summarize(chunks[i]);
-    summaries.push(summary);
-  }
-
-  let combined = summaries.join('\n');
-
-  // If the combined result still exceeds the threshold, summarize recursively
-  while (combined.length > CHUNK_SIZE && summaries.length > 1) {
-    const newChunks = splitIntoChunks(combined);
-    summaries = [];
-    for (let i = 0; i < newChunks.length; i++) {
-      onProgress(`Compressing further (${i + 1}/${newChunks.length})...`);
-      const summary = await partialSummarizer.summarize(newChunks[i]);
-      summaries.push(summary);
-    }
-    combined = summaries.join('\n');
-  }
-
-  return combined;
 }
+
+init();
 
 summarizeBtn.addEventListener('click', async () => {
   outputEl.textContent = '';
@@ -132,6 +106,7 @@ summarizeBtn.addEventListener('click', async () => {
       setStatus('Unable to access the active tab.');
       return;
     }
+    currentTabUrl = tab.url ?? null;
 
     const [{ result: articleText }] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
@@ -143,50 +118,33 @@ summarizeBtn.addEventListener('click', async () => {
       return;
     }
 
-    const availability = await Summarizer.availability();
-    if (availability === 'unavailable') {
-      setStatus('The summarization model is not available on this device.');
-      return;
-    }
-
-    const userType = typeSelect.value;
-    const userLength = lengthSelect.value;
-
-    let textToSummarize = articleText;
-
-    // If the text is too long for a single call, apply the
-    // "summary of summaries" technique before the final summary.
-    if (articleText.length > CHUNK_SIZE * 1.2) {
-      const chunks = splitIntoChunks(articleText);
-      textToSummarize = await recursiveSummaryOfSummaries(chunks, setStatus);
-    }
-
-    setStatus('Generating the final summary...');
-
-    const finalSummarizer = await Summarizer.create({
-      type: userType,
-      format: 'markdown',
-      length: userLength,
-      sharedContext: 'This is an article found on a web page.',
-      monitor(m) {
-        m.addEventListener('downloadprogress', (e) => {
-          setStatus(`Downloading model: ${Math.round(e.loaded * 100)}%`);
-        });
+    // Hand the job off to the offscreen document (via the service worker) and
+    // just reflect its state: the pipeline keeps running if the popup closes.
+    setStatus('Starting summarization...');
+    const response = await chrome.runtime.sendMessage({
+      target: 'background',
+      action: 'start-summarization',
+      payload: {
+        articleText,
+        type: typeSelect.value,
+        length: lengthSelect.value,
+        url: tab.url,
       },
     });
 
-    const finalSummary = await finalSummarizer.summarize(textToSummarize, {
-      context: 'Summary intended for a reader who wants to quickly grasp the main points.',
-    });
-
-    outputEl.textContent = finalSummary;
-    copyBtn.style.display = 'block';
-    setStatus('Done.');
+    if (!response?.ok) {
+      setStatus(`Error: ${response?.error || 'could not start the summarization.'}`);
+    }
   } catch (err) {
     console.error(err);
     setStatus(`Error: ${err.message || err}`);
   } finally {
-    summarizeBtn.disabled = false;
+    // Keep the button disabled only while a job for this page is running;
+    // renderJob() re-enables it on done/error.
+    const { job } = await chrome.storage.session.get('job');
+    if (!(job && job.url === currentTabUrl && job.status === 'running')) {
+      summarizeBtn.disabled = false;
+    }
   }
 });
 

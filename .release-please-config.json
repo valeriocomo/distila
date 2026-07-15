@@ -12,5 +12,7 @@
     }
   ],
   "include-component-in-tag": false,
-  "pull-request-title-pattern": "chore: release ${version}"
+  "pull-request-title-pattern": "chore: release ${version}",
+  "bootstrap-sha": "ee4c1d3fe1ca4323e9760e0043fdb0d9a535814b",
+  "packages": { ".": {} }
 }

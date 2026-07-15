@@ -4,6 +4,7 @@ const statusEl = document.getElementById('status');
 const outputEl = document.getElementById('output');
 const typeSelect = document.getElementById('typeSelect');
 const lengthSelect = document.getElementById('lengthSelect');
+const formatSelect = document.getElementById('formatSelect');
 
 // The popup is only a view: the summarization runs in the offscreen document
 // (see offscreen.js) so it survives the popup being closed. The popup renders
@@ -128,6 +129,7 @@ summarizeBtn.addEventListener('click', async () => {
         articleText,
         type: typeSelect.value,
         length: lengthSelect.value,
+        format: formatSelect.value,
         url: tab.url,
       },
     });

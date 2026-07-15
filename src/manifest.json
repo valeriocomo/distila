@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Distila",
-  "version": "1.0.1",
+  "version": "1.0.0",
   "description": "Distila: summarizes the article on the current page using Chrome's on-device Summarizer API.",
   "icons": {
     "16": "icons/icon16.png",

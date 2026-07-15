@@ -98,7 +98,7 @@ async function recursiveSummaryOfSummaries(chunks, onProgress) {
   }
 }
 
-async function runJob({ articleText, type, length, url }) {
+async function runJob({ articleText, type, length, format = 'markdown', url }) {
   const onProgress = (msg) => updateJob({ progress: msg });
 
   await setJob({
@@ -107,6 +107,7 @@ async function runJob({ articleText, type, length, url }) {
     url,
     type,
     length,
+    format,
     startedAt: Date.now(),
   });
 
@@ -115,7 +116,7 @@ async function runJob({ articleText, type, length, url }) {
       throw new Error('The Summarizer API is not available in this browser (requires Chrome 138+).');
     }
 
-    const availability = await Summarizer.availability();
+    const availability = await Summarizer.availability({outputLanguage: 'en'});
     if (availability === 'unavailable') {
       throw new Error('The summarization model is not available on this device.');
     }
@@ -133,7 +134,7 @@ async function runJob({ articleText, type, length, url }) {
 
     const finalSummarizer = await Summarizer.create({
       type,
-      format: 'markdown',
+      format,
       length,
       outputLanguage: 'en',
       sharedContext: 'This is an article found on a web page.',
@@ -148,7 +149,7 @@ async function runJob({ articleText, type, length, url }) {
       const finalSummary = await finalSummarizer.summarize(textToSummarize, {
         context: 'Summary intended for a reader who wants to quickly grasp the main points.',
       });
-      await setJob({ status: 'done', summary: finalSummary, url, type, length });
+      await setJob({ status: 'done', summary: finalSummary, url, type, length, format });
     } finally {
       finalSummarizer.destroy();
     }

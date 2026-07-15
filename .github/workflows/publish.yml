@@ -105,3 +105,23 @@ jobs:
           zip-path: extension.zip
           api-key: ${{ secrets.EDGE_API_KEY }}
           client-id: ${{ secrets.EDGE_CLIENT_ID }}
+
+  # ────────────────────────────────────────────────────────────
+  # 4. Create a GitHub Release once both stores are published
+  # ────────────────────────────────────────────────────────────
+  release:
+    needs: [build, publish-chrome, publish-edge]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download zip
+        uses: actions/download-artifact@v4
+        with:
+          name: extension-package
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: extension.zip
+          generate_release_notes: true

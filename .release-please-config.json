@@ -4,7 +4,13 @@
   "bump-minor-pre-major": true,
   "bump-patch-for-minor-pre-major": false,
   "changelog-path": "CHANGELOG.md",
-  "extra-files": ["src/manifest.json"],
+  "extra-files": [
+    {
+      "type": "json",
+      "path": "src/manifest.json",
+      "jsonpath": "$.version"
+    }
+  ],
   "include-component-in-tag": false,
   "pull-request-title-pattern": "chore: release ${version}"
 }

@@ -4,6 +4,15 @@ on:
   push:
     tags:
       - 'v*'
+  # release-please crea il tag con il GITHUB_TOKEN, i cui eventi non fanno
+  # scattare altri workflow: il run su tag parte solo per tag pushati a mano.
+  # Il flusso automatico passa da qui, dispatchato da release-please.yml.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag da pubblicare (es. v1.2.3)'
+        required: true
+        type: string
 
 jobs:
   # ────────────────────────────────────────────────────────────
@@ -16,6 +25,9 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # su workflow_dispatch builda il tag richiesto, non main
+          ref: ${{ inputs.tag || github.ref }}
 
       - uses: actions/setup-node@v4
         with:
@@ -26,9 +38,11 @@ jobs:
 
       - name: Extract version from tag
         id: version
+        env:
+          RAW_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           # Tag e.g. "v1.2.3" -> "1.2.3"
-          TAG="${GITHUB_REF_NAME#v}"
+          TAG="${RAW_TAG#v}"
           echo "version=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Set package.json version to match the tag
@@ -125,4 +139,6 @@ jobs:
       - name: Attach zip to release
         uses: softprops/action-gh-release@v2
         with:
+          # esplicito perché su workflow_dispatch github.ref è main
+          tag_name: ${{ inputs.tag || github.ref_name }}
           files: extension.zip

@@ -6,12 +6,27 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write # per dispatchare publish.yml
 
 jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
       - uses: googleapis/release-please-action@v4
+        id: release
         with:
           config-file: .release-please-config.json
           manifest-file: .release-please-manifest.json
+
+      # Il tag viene creato con il GITHUB_TOKEN, i cui eventi non fanno
+      # scattare altri workflow: publish.yml va dispatchato esplicitamente
+      # (workflow_dispatch è l'eccezione a quella regola).
+      - name: Trigger publish workflow
+        if: ${{ steps.release.outputs.release_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run publish.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f tag="${{ steps.release.outputs.tag_name }}"

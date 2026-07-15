@@ -108,7 +108,8 @@ jobs:
           client-id: ${{ secrets.EDGE_CLIENT_ID }}
 
   # ────────────────────────────────────────────────────────────
-  # 4. Create a GitHub Release once both stores are published
+  # 4. Attach the built zip to the GitHub Release that
+  #    release-please already created for this tag
   # ────────────────────────────────────────────────────────────
   release:
     needs: [build, publish-chrome]  # riaggiungere publish-edge quando viene riattivato
@@ -121,8 +122,7 @@ jobs:
         with:
           name: extension-package
 
-      - name: Create GitHub Release
+      - name: Attach zip to release
         uses: softprops/action-gh-release@v2
         with:
           files: extension.zip
-          generate_release_notes: true

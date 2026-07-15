@@ -90,6 +90,7 @@ jobs:
   #    manually from Partner Center (the Product ID is needed).
   # ────────────────────────────────────────────────────────────
   publish-edge:
+    if: false  # Temporaneamente disabilitato: rimuovere questa riga per riattivare
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -105,3 +106,23 @@ jobs:
           zip-path: extension.zip
           api-key: ${{ secrets.EDGE_API_KEY }}
           client-id: ${{ secrets.EDGE_CLIENT_ID }}
+
+  # ────────────────────────────────────────────────────────────
+  # 4. Create a GitHub Release once both stores are published
+  # ────────────────────────────────────────────────────────────
+  release:
+    needs: [build, publish-chrome]  # riaggiungere publish-edge quando viene riattivato
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download zip
+        uses: actions/download-artifact@v4
+        with:
+          name: extension-package
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: extension.zip
+          generate_release_notes: true

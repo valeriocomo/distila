@@ -1,0 +1,10 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "node",
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": false,
+  "changelog-path": "CHANGELOG.md",
+  "extra-files": ["src/manifest.json"],
+  "include-component-in-tag": false,
+  "pull-request-title-pattern": "chore: release ${version}"
+}

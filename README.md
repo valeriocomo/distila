@@ -29,7 +29,11 @@ project/
 │   ├── build-zip.js            ← packages src/ into extension.zip
 │   └── sync-version.js         ← syncs package.json version -> manifest.json
 ├── package.json
+├── .release-please-config.json ← release-please settings
+├── .release-please-manifest.json ← release-please version tracking
+├── CHANGELOG.md                ← generated automatically by release-please
 ├── .github/workflows/
+│   ├── release-please.yml      ← opens the release PR / creates tags+releases
 │   └── publish.yml             ← auto-publishes on "v*" tags
 └── README.md
 ```
@@ -107,29 +111,49 @@ npm run build     # creates extension.zip from src/, cross-platform (no system `
 
 `npm run build` uses the `archiver` package under the hood, so it works the same way on Windows, macOS, and Linux.
 
+## Commit message convention
+
+Commits (and PR titles, if you squash-merge — see below) must follow [Conventional Commits](https://www.conventionalcommits.org/), since [release-please](#releasing-a-new-version) parses them to decide the next version and to build the changelog:
+
+| Prefix | Effect |
+|---|---|
+| `feat:` | Triggers a **minor** bump |
+| `fix:` | Triggers a **patch** bump |
+| `feat!:` / `fix!:` / a `BREAKING CHANGE:` footer | Triggers a **major** bump |
+| `chore:`, `ci:`, `docs:`, `refactor:`, `test:`, `style:` | No version bump, excluded from the changelog |
+
+A `commit-msg` git hook (via `husky` + `commitlint`, installed automatically by `npm install`) rejects non-conforming commit messages locally.
+
+**Squash-merge caveat:** if a PR is merged with GitHub's "Squash and merge", the resulting commit on `main` uses the **PR title**, not the individual commits inside it — make sure the PR title itself follows the convention above, since that's what release-please actually reads.
+
 ## Releasing a new version
 
-The version lives in `package.json` and is kept in sync with `src/manifest.json` automatically.
+Releases are managed with [release-please](https://github.com/googleapis/release-please). The [`release-please`](.github/workflows/release-please.yml) workflow only runs on manual trigger (`workflow_dispatch`) — it never fires automatically on push:
+
+1. Merge Conventional Commits into `main` as normal.
+2. Manually run the `release-please` workflow (Actions tab → **Run workflow**, or `gh workflow run release-please.yml`). This opens/updates a single rolling "release PR" that bumps the version in `package.json` and `src/manifest.json` and updates [`CHANGELOG.md`](CHANGELOG.md).
+3. Merge that PR, then **run the `release-please` workflow manually a second time** — this is what makes release-please detect the merge and create the Git tag (`vX.Y.Z`) **and** the GitHub Release (with a categorized changelog). Nothing happens automatically after the merge until you trigger it.
+4. The tag push triggers `.github/workflows/publish.yml` exactly as described below, which builds the zip and attaches it to the Release that release-please just created.
+
+Configuration lives in [`.release-please-config.json`](.release-please-config.json) and [`.release-please-manifest.json`](.release-please-manifest.json).
+
+### Manual fallback (emergency only)
 
 ```bash
 npm version patch   # or minor / major
 git push --follow-tags
 ```
 
-What `npm version` does here:
-1. Bumps the version in `package.json`
-2. Runs the `version` npm lifecycle script, which calls `sync-version.js` to update `src/manifest.json` and stages the change
-3. Creates a commit and a Git tag (e.g. `v1.1.0`)
+This still works (`sync-version.js` keeps `src/manifest.json` in sync as before), but bypasses the release-please PR review step and the generated changelog entry — prefer the automated flow above.
 
-Pushing the tag (`git push --follow-tags`) triggers `.github/workflows/publish.yml`.
+## Automated publishing
 
-## Automated publishing (after the first manual upload)
-
-The `.github/workflows/publish.yml` workflow triggers on every Git tag in the `vX.Y.Z` format and publishes to **both the Chrome Web Store and Microsoft Edge Add-ons** in parallel:
+The `.github/workflows/publish.yml` workflow triggers on every Git tag in the `vX.Y.Z` format (created above by release-please, or manually as a fallback) and publishes to **both the Chrome Web Store and Microsoft Edge Add-ons** in parallel:
 
 1. `build` job: extracts the version from the tag, sets it in `package.json`, syncs it into `src/manifest.json` (`npm run sync-version`), builds `extension.zip` (`npm run build`), and shares it as an artifact
 2. `publish-chrome` job: downloads the zip and publishes it via `chrome-webstore-upload-cli`
 3. `publish-edge` job: downloads the zip and publishes it via the `wdzeng/edge-addon@v2` action (Microsoft Edge Add-ons API)
+4. `release` job: downloads the zip and attaches it to the GitHub Release that release-please already created for this tag
 
 ### Secrets to configure on GitHub (Settings → Secrets and variables → Actions)
 

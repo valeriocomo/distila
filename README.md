@@ -58,9 +58,10 @@ project/
 ## How it works
 
 - `popup.js` injects a function into the page (`chrome.scripting.executeScript`) that extracts the article text (`<article>`, common containers, or a fallback on `body`), using `innerText` to avoid HTML markup
+- The popup hands the extracted text off to the background service worker, which ensures an **offscreen document** exists and forwards the job to it — the actual summarization pipeline runs there (in `offscreen.js`), not in the popup, so it survives the popup closing. The Summarizer API still requires a document context (not a service worker), which is exactly what the offscreen document provides
 - If the text is very long, the **"summary of summaries"** technique is applied: the text is split into ~3000-character chunks, each chunk is summarized individually (`tldr` type, `plain-text`, `long`), the partial summaries are concatenated and, if needed, recursively re-compressed
 - The final summary is generated using the options chosen by the user (`type`, `length`, `format: markdown`)
-- The Summarizer API is called directly in the popup (a document context), not in the service worker, as required by the spec
+- Job progress/results are relayed back to the service worker and stored in `chrome.storage.session`; the popup renders from there and re-syncs on every open via `chrome.storage.onChanged`
 - The "Copy" button uses `navigator.clipboard.writeText()`
 
 ## Notes

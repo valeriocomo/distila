@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git commit *)",
+      "Bash(gh pr *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" --max-time 10 https://api.github.com)",
+      "Bash(env)",
+      "Bash(getent hosts *)",
+      "Bash(curl -sv --max-time 10 https://api.github.com)",
+      "Read(//etc/**)",
+      "Bash(git branch *)"
+    ]
+  }
+}

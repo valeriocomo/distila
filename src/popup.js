@@ -16,6 +16,36 @@ function setStatus(msg) {
   statusEl.textContent = msg;
 }
 
+// Persist the filter selections (chrome.storage.sync) so they survive the
+// popup closing — the popup DOM dies as soon as the user clicks outside it.
+const filterSelects = { type: typeSelect, length: lengthSelect, format: formatSelect };
+
+function saveFilters() {
+  chrome.storage.sync.set({
+    filters: {
+      type: typeSelect.value,
+      length: lengthSelect.value,
+      format: formatSelect.value,
+    },
+  });
+}
+
+async function restoreFilters() {
+  const { filters } = await chrome.storage.sync.get('filters');
+  if (!filters) return;
+  for (const [key, select] of Object.entries(filterSelects)) {
+    const value = filters[key];
+    // Only apply values that still match an existing option
+    if (value && select.querySelector(`option[value="${value}"]`)) {
+      select.value = value;
+    }
+  }
+}
+
+for (const select of Object.values(filterSelects)) {
+  select.addEventListener('change', saveFilters);
+}
+
 /**
  * Function executed IN the page context (via chrome.scripting.executeScript).
  * Tries to isolate the article text, otherwise falls back to the whole body.
@@ -74,6 +104,8 @@ function renderJob(job) {
 }
 
 async function init() {
+  await restoreFilters();
+
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   currentTabUrl = tab?.url ?? null;
 

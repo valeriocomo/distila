@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.1](https://github.com/valeriocomo/distila/compare/v1.1.0...v1.1.1) (2026-08-12)
+
+
+### Bug Fixes
+
+* **ci:** dispatch publish workflow after release-please creates a release ([#13](https://github.com/valeriocomo/distila/issues/13)) ([6662ebe](https://github.com/valeriocomo/distila/commit/6662ebe4046c653476765409e76485590694c8e5))
+* persist summary filters across popup reopens ([#21](https://github.com/valeriocomo/distila/issues/21)) ([e08c7a0](https://github.com/valeriocomo/distila/commit/e08c7a0941148088c7140eb6bcfaf496282379f8))
+
 ## [1.1.0](https://github.com/valeriocomo/distila/compare/v1.0.0...v1.1.0) (2026-07-15)
 
 

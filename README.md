@@ -34,7 +34,8 @@ project/
 ├── CHANGELOG.md                ← generated automatically by release-please
 ├── .github/workflows/
 │   ├── release-please.yml      ← opens the release PR / creates tags+releases
-│   └── publish.yml             ← auto-publishes on "v*" tags
+│   └── publish.yml             ← builds & publishes to the stores (dispatched by release-please)
+├── RELEASE.md                  ← release & publishing process
 └── README.md
 ```
 
@@ -114,7 +115,7 @@ npm run build     # creates extension.zip from src/, cross-platform (no system `
 
 ## Commit message convention
 
-Commits (and PR titles, if you squash-merge — see below) must follow [Conventional Commits](https://www.conventionalcommits.org/), since [release-please](#releasing-a-new-version) parses them to decide the next version and to build the changelog:
+Commits (and PR titles, if you squash-merge — see below) must follow [Conventional Commits](https://www.conventionalcommits.org/), since [release-please](RELEASE.md) parses them to decide the next version and to build the changelog:
 
 | Prefix | Effect |
 |---|---|
@@ -127,64 +128,6 @@ A `commit-msg` git hook (via `husky` + `commitlint`, installed automatically by 
 
 **Squash-merge caveat:** if a PR is merged with GitHub's "Squash and merge", the resulting commit on `main` uses the **PR title**, not the individual commits inside it — make sure the PR title itself follows the convention above, since that's what release-please actually reads.
 
-## Releasing a new version
+## Releasing & publishing
 
-Releases are managed with [release-please](https://github.com/googleapis/release-please). The [`release-please`](.github/workflows/release-please.yml) workflow only runs on manual trigger (`workflow_dispatch`) — it never fires automatically on push:
-
-1. Merge Conventional Commits into `main` as normal.
-2. Manually run the `release-please` workflow (Actions tab → **Run workflow**, or `gh workflow run release-please.yml`). This opens/updates a single rolling "release PR" that bumps the version in `package.json` and `src/manifest.json` and updates [`CHANGELOG.md`](CHANGELOG.md).
-3. Merge that PR, then **run the `release-please` workflow manually a second time** — this is what makes release-please detect the merge and create the Git tag (`vX.Y.Z`) **and** the GitHub Release (with a categorized changelog). Nothing happens automatically after the merge until you trigger it.
-4. The tag push triggers `.github/workflows/publish.yml` exactly as described below, which builds the zip and attaches it to the Release that release-please just created.
-
-Configuration lives in [`.release-please-config.json`](.release-please-config.json) and [`.release-please-manifest.json`](.release-please-manifest.json).
-
-### Manual fallback (emergency only)
-
-```bash
-npm version patch   # or minor / major
-git push --follow-tags
-```
-
-This still works (`sync-version.js` keeps `src/manifest.json` in sync as before), but bypasses the release-please PR review step and the generated changelog entry — prefer the automated flow above.
-
-## Automated publishing
-
-The `.github/workflows/publish.yml` workflow triggers on every Git tag in the `vX.Y.Z` format (created above by release-please, or manually as a fallback) and publishes to **both the Chrome Web Store and Microsoft Edge Add-ons** in parallel:
-
-1. `build` job: extracts the version from the tag, sets it in `package.json`, syncs it into `src/manifest.json` (`npm run sync-version`), builds `extension.zip` (`npm run build`), and shares it as an artifact
-2. `publish-chrome` job: downloads the zip and publishes it via `chrome-webstore-upload-cli`
-3. `publish-edge` job: downloads the zip and publishes it via the `wdzeng/edge-addon@v2` action (Microsoft Edge Add-ons API)
-4. `release` job: downloads the zip and attaches it to the GitHub Release that release-please already created for this tag
-
-### Secrets to configure on GitHub (Settings → Secrets and variables → Actions)
-
-**Chrome Web Store:**
-
-| Secret | Description |
-|---|---|
-| `CHROME_CLIENT_ID` | OAuth Client ID (Google Cloud Console) |
-| `CHROME_CLIENT_SECRET` | OAuth Client Secret |
-| `CHROME_REFRESH_TOKEN` | Refresh token with `chromewebstore` scope |
-| `CHROME_PUBLISHER_ID` | Publisher ID, from the account section of the Developer Dashboard |
-| `CHROME_EXTENSION_ID` | Extension ID, obtained after the **first manual upload** to the Chrome Web Store |
-
-**Microsoft Edge Add-ons:**
-
-| Secret | Description |
-|---|---|
-| `EDGE_PRODUCT_ID` | Product ID, from the extension's "Edge Overview" page in Partner Center |
-| `EDGE_CLIENT_ID` | Client ID, generated in Partner Center → "Publish API" page |
-| `EDGE_API_KEY` | API key, generated on the same "Publish API" page — **expires every 72 days**, must be regenerated periodically |
-
-### Mandatory prerequisite (applies to both stores)
-
-The first publication **must** happen manually from each dashboard:
-- **Chrome**: Developer Dashboard → upload zip + fill in the "Store listing" and "Privacy" tabs
-- **Edge**: Partner Center → "Create new extension" + upload zip + fill in properties/listing
-
-Only after obtaining the extension IDs will the automated workflow work for subsequent updates. `wdzeng/edge-addon` in particular **does not support creating a new extension**, only updating an existing one.
-
-Important notes:
-- Every `publish` still goes through Google/Microsoft review
-- If you add new permissions to the manifest, the extension will be disabled for existing users until they re-approve it (applies to both stores)
-- The Edge API key expires every 72 days: if the `publish-edge` job starts failing with authentication errors, regenerate it in Partner Center and update the `EDGE_API_KEY` secret
+The full release process — the two-step release-please flow (open the release PR, merge it, run the workflow again to cut the tag/Release and dispatch the publish), the store publishing workflow, the required secrets, and the manual fallback — is documented in **[RELEASE.md](RELEASE.md)**.

@@ -8,7 +8,12 @@
       "Bash(getent hosts *)",
       "Bash(curl -sv --max-time 10 https://api.github.com)",
       "Read(//etc/**)",
-      "Bash(git branch *)"
+      "Bash(git branch *)",
+      "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('src/manifest.json','utf8'\\)\\); console.log\\('all OK'\\)\")",
+      "Bash(git commit -m 'docs: update README with output language auto-detection *)",
+      "Bash(gh issue *)",
+      "Bash(gh pr create --base main --title 'feat: auto-detect summary output language' --body ' *)",
+      "Bash(git commit -m 'chore: update local permission allowlist *)"
     ]
   }
 }

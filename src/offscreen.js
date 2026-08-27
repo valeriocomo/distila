@@ -8,6 +8,12 @@
 
 const CHUNK_SIZE = 3000; // characters, ~750 tokens per Chrome's docs
 
+// Output languages the Gemini Nano model supports (Chrome 149+); on older
+// Chrome the runtime Summarizer.availability() probe narrows this further.
+const SUPPORTED_OUTPUT_LANGUAGES = ['en', 'es', 'ja', 'de', 'fr'];
+const DETECTION_SAMPLE_SIZE = 2000; // chars; article openings detect reliably
+const DETECTION_CONFIDENCE_THRESHOLD = 0.5;
+
 let jobRunning = false;
 let currentJob = null;
 
@@ -56,17 +62,100 @@ function splitIntoChunks(text, chunkSize = CHUNK_SIZE) {
 }
 
 /**
+ * Detects the article language with the LanguageDetector API. Returns a
+ * BCP-47 tag, or null when the API is missing, the model is unavailable, or
+ * the top result is undetermined/low-confidence — the caller then falls back
+ * to English without caching, so a later click can retry.
+ */
+async function detectLanguage(text, onProgress) {
+  if (!('LanguageDetector' in self)) return null;
+
+  try {
+    if ((await LanguageDetector.availability()) === 'unavailable') return null;
+
+    const detector = await LanguageDetector.create({
+      monitor(m) {
+        m.addEventListener('downloadprogress', (e) => {
+          onProgress(`Downloading language detector: ${Math.round(e.loaded * 100)}%`);
+        });
+      },
+    });
+
+    try {
+      const [top] = await detector.detect(text.slice(0, DETECTION_SAMPLE_SIZE));
+      if (!top || top.detectedLanguage === 'und') return null;
+      return top.confidence >= DETECTION_CONFIDENCE_THRESHOLD ? top.detectedLanguage : null;
+    } finally {
+      detector.destroy();
+    }
+  } catch (err) {
+    console.error('Language detection failed', err);
+    return null;
+  }
+}
+
+/**
+ * Creates a Translator for the given pair, or returns null when the API is
+ * missing or the pair is unsupported (any other availability means create()
+ * works, downloading the pair's model on first use).
+ */
+async function createTranslator(sourceLanguage, targetLanguage, onProgress) {
+  if (!('Translator' in self)) return null;
+
+  const availability = await Translator.availability({ sourceLanguage, targetLanguage });
+  if (availability === 'unavailable') return null;
+
+  return Translator.create({
+    sourceLanguage,
+    targetLanguage,
+    monitor(m) {
+      m.addEventListener('downloadprogress', (e) => {
+        onProgress(`Downloading translator (${sourceLanguage}→${targetLanguage}): ${Math.round(e.loaded * 100)}%`);
+      });
+    },
+  });
+}
+
+/**
+ * Translates a long text chunk by chunk (translate() on a whole article is
+ * risky), reusing the same chunking as the summarization pipeline.
+ */
+async function translateInChunks(translator, text, onProgress, label) {
+  const chunks = splitIntoChunks(text);
+  const out = [];
+  for (let i = 0; i < chunks.length; i++) {
+    await onProgress(`${label} ${i + 1}/${chunks.length}...`);
+    out.push(await translator.translate(chunks[i]));
+  }
+  return out.join('\n');
+}
+
+/**
+ * Translates a markdown summary line by line, shielding leading structural
+ * tokens (headers, bullets, ordered lists) from the translator. Inline
+ * formatting may still be altered by the model.
+ */
+async function translateMarkdownPreserving(translator, markdown) {
+  const out = [];
+  for (const line of markdown.split('\n')) {
+    const m = line.match(/^(\s*(?:#{1,6}\s+|[-*+]\s+|\d+\.\s+)?)(.*)$/);
+    out.push(m[2].trim() ? m[1] + (await translator.translate(m[2])) : line);
+  }
+  return out.join('\n');
+}
+
+/**
  * Summarizes each chunk with "compressed" settings (tldr, plain-text, long)
  * to preserve as much context as possible, then concatenates the results.
  * If the concatenated result is still too long, it repeats recursively
  * (the "summary of summaries" technique described in Chrome's docs).
  */
-async function recursiveSummaryOfSummaries(chunks, onProgress) {
+async function recursiveSummaryOfSummaries(chunks, onProgress, outputLanguage) {
   const partialSummarizer = await Summarizer.create({
     type: 'tldr',
     format: 'plain-text',
     length: 'long',
-    outputLanguage: 'en',
+    outputLanguage,
     sharedContext: 'Summarize while keeping the main factual points of the text.',
   });
 
@@ -98,7 +187,7 @@ async function recursiveSummaryOfSummaries(chunks, onProgress) {
   }
 }
 
-async function runJob({ articleText, type, length, format = 'markdown', url }) {
+async function runJob({ articleText, type, length, format = 'markdown', url, tabId, detectedLanguage }) {
   const onProgress = (msg) => updateJob({ progress: msg });
 
   await setJob({
@@ -116,18 +205,74 @@ async function runJob({ articleText, type, length, format = 'markdown', url }) {
       throw new Error('The Summarizer API is not available in this browser (requires Chrome 138+).');
     }
 
-    const availability = await Summarizer.availability({outputLanguage: 'en'});
+    // Detect the article language once per page: the background caches it per
+    // tab and hands it back as detectedLanguage on later jobs for the same url.
+    let language = detectedLanguage;
+    if (!language) {
+      await onProgress('Detecting language...');
+      language = await detectLanguage(articleText, onProgress);
+      if (language && tabId != null) {
+        await chrome.runtime.sendMessage({
+          target: 'background',
+          action: 'language-detected',
+          tabId,
+          url,
+          language,
+        });
+      }
+    }
+
+    const base = language ? language.split('-')[0].toLowerCase() : 'en';
+    let outputLanguage = 'en';
+    let warning;
+
+    if (language && base !== 'en') {
+      const supported =
+        SUPPORTED_OUTPUT_LANGUAGES.includes(base) &&
+        (await Summarizer.availability({ outputLanguage: base })) !== 'unavailable';
+      if (supported) {
+        outputLanguage = base;
+      } else {
+        warning = `Language "${base}" not supported — summary may contain errors.`;
+        // updateJob patches spread currentJob, so every progress update from
+        // here on carries the warning along.
+        await updateJob({ warning });
+      }
+    }
+
+    // Unsupported language: translate to English before summarizing. If the
+    // pair is unavailable or translation throws, summarize the original text
+    // in English anyway — the warning already covers the degraded result.
+    let inputText = articleText;
+    let translated = false;
+    if (warning) {
+      try {
+        const toEn = await createTranslator(language, 'en', onProgress);
+        if (toEn) {
+          try {
+            inputText = await translateInChunks(toEn, articleText, onProgress, 'Translating section');
+            translated = true;
+          } finally {
+            toEn.destroy();
+          }
+        }
+      } catch (err) {
+        console.error('Translation to English failed', err);
+      }
+    }
+
+    const availability = await Summarizer.availability({ outputLanguage });
     if (availability === 'unavailable') {
       throw new Error('The summarization model is not available on this device.');
     }
 
-    let textToSummarize = articleText;
+    let textToSummarize = inputText;
 
     // If the text is too long for a single call, apply the
     // "summary of summaries" technique before the final summary.
-    if (articleText.length > CHUNK_SIZE * 1.2) {
-      const chunks = splitIntoChunks(articleText);
-      textToSummarize = await recursiveSummaryOfSummaries(chunks, onProgress);
+    if (inputText.length > CHUNK_SIZE * 1.2) {
+      const chunks = splitIntoChunks(inputText);
+      textToSummarize = await recursiveSummaryOfSummaries(chunks, onProgress, outputLanguage);
     }
 
     await onProgress('Generating the final summary...');
@@ -136,7 +281,7 @@ async function runJob({ articleText, type, length, format = 'markdown', url }) {
       type,
       format,
       length,
-      outputLanguage: 'en',
+      outputLanguage,
       sharedContext: 'This is an article found on a web page.',
       monitor(m) {
         m.addEventListener('downloadprogress', (e) => {
@@ -146,10 +291,31 @@ async function runJob({ articleText, type, length, format = 'markdown', url }) {
     });
 
     try {
-      const finalSummary = await finalSummarizer.summarize(textToSummarize, {
+      let finalSummary = await finalSummarizer.summarize(textToSummarize, {
         context: 'Summary intended for a reader who wants to quickly grasp the main points.',
       });
-      await setJob({ status: 'done', summary: finalSummary, url, type, length, format });
+
+      // Translate the English summary back to the detected language. On
+      // failure keep the English summary rather than failing the job.
+      if (warning && translated) {
+        try {
+          await onProgress('Translating summary...');
+          const fromEn = await createTranslator('en', language, onProgress);
+          if (fromEn) {
+            try {
+              finalSummary = format === 'markdown'
+                ? await translateMarkdownPreserving(fromEn, finalSummary)
+                : await fromEn.translate(finalSummary);
+            } finally {
+              fromEn.destroy();
+            }
+          }
+        } catch (err) {
+          console.error('Back-translation failed', err);
+        }
+      }
+
+      await setJob({ status: 'done', summary: finalSummary, warning, url, type, length, format });
     } finally {
       finalSummarizer.destroy();
     }

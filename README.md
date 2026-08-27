@@ -1,10 +1,10 @@
 # Distila
 
-Chrome extension that uses the **on-device Summarizer API** (Gemini Nano) to summarize the article on the current page, with the ability to copy the summary to the clipboard.
+Chrome extension that uses the **on-device Summarizer API** (Gemini Nano) to summarize the article on the current page, with the ability to copy the summary to the clipboard. The article's language is detected automatically (on-device **LanguageDetector API**) and the summary is produced in that language; unsupported languages fall back to an on-device translation round-trip (**Translator API**).
 
 ## Requirements
 
-- Chrome 138+ (stable)
+- Chrome 138+ (stable); summaries in Spanish, Japanese, German, or French require Chrome 149+ (older versions use the translation fallback instead)
 - Windows 10/11, macOS 13+, Linux, or ChromeOS on a Chromebook Plus
 - At least 22 GB of free space on the Chrome profile volume (for the one-time Gemini Nano model download)
 - GPU with more than 4 GB of VRAM, or CPU with 16 GB RAM and 4+ cores
@@ -18,6 +18,9 @@ project/
 │   ├── manifest.json
 │   ├── popup.html
 │   ├── popup.js
+│   ├── background.js           ← coordinator service worker
+│   ├── offscreen.html
+│   ├── offscreen.js            ← summarization pipeline (offscreen document)
 │   └── icons/
 │       ├── icon16.png
 │       ├── icon48.png
@@ -51,17 +54,20 @@ project/
 
 1. Open an article/page with text
 2. Click the extension icon
-3. Choose summary type (key points, TL;DR, teaser, headline) and length
+3. Choose summary type (key points, TL;DR), length (short, medium, long), and format (Markdown, plain text)
 4. Click "Summarize article"
-5. On first use, Chrome may download the Gemini Nano model (you'll see a progress %)
-6. Click "Copy summary" to copy it to the clipboard
+5. On first use, Chrome may download the on-device models — Gemini Nano, the language detector, and (for unsupported languages) the translation model for the detected pair (you'll see a progress %)
+6. The summary comes back in the article's language; if the language isn't supported by the model, a notice appears and the summary is produced via translation (article → English → summary → back)
+7. Click "Copy summary" to copy it to the clipboard
 
 ## How it works
 
 - `popup.js` injects a function into the page (`chrome.scripting.executeScript`) that extracts the article text (`<article>`, common containers, or a fallback on `body`), using `innerText` to avoid HTML markup
 - The popup hands the extracted text off to the background service worker, which ensures an **offscreen document** exists and forwards the job to it — the actual summarization pipeline runs there (in `offscreen.js`), not in the popup, so it survives the popup closing. The Summarizer API still requires a document context (not a service worker), which is exactly what the offscreen document provides
+- The article's language is detected **once per page** with the on-device **LanguageDetector API**; the result is cached per tab (`chrome.storage.session`) and dropped when the tab closes. If the detected language is supported by the model (English, Spanish, Japanese, German, French — subject to a runtime availability check), it's used as the Summarizer's `outputLanguage`
+- If the language is **not** supported, a notice is shown in the popup and the **Translator API** kicks in: the article is translated to English (chunk by chunk), summarized in English, and the summary is translated back to the detected language. If the translation pair isn't available, the extension still summarizes in English and keeps the notice
 - If the text is very long, the **"summary of summaries"** technique is applied: the text is split into ~3000-character chunks, each chunk is summarized individually (`tldr` type, `plain-text`, `long`), the partial summaries are concatenated and, if needed, recursively re-compressed
-- The final summary is generated using the options chosen by the user (`type`, `length`, `format: markdown`)
+- The final summary is generated using the options chosen by the user (`type`, `length`, `format`)
 - Job progress/results are relayed back to the service worker and stored in `chrome.storage.session`; the popup renders from there and re-syncs on every open via `chrome.storage.onChanged`
 - The "Copy" button uses `navigator.clipboard.writeText()`
 

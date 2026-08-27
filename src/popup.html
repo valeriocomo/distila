@@ -52,6 +52,16 @@
     margin: 8px 0;
     min-height: 16px;
   }
+  #warning {
+    display: none;
+    font-size: 12px;
+    padding: 6px 8px;
+    margin: 0 0 8px;
+    border-radius: 6px;
+    background: light-dark(#fef3e0, #3a2f1a);
+    color: light-dark(#8a5300, #fdd663);
+    border: 1px solid light-dark(#f0c987, #6b5b2e);
+  }
   #output {
     width: 100%;
     box-sizing: border-box;
@@ -89,6 +99,7 @@
 
   <button id="summarizeBtn">Summarize article</button>
   <div id="status"></div>
+  <div id="warning"></div>
   <div id="output"></div>
   <button id="copyBtn">Copy summary</button>
 

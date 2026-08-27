@@ -1,6 +1,7 @@
 const summarizeBtn = document.getElementById('summarizeBtn');
 const copyBtn = document.getElementById('copyBtn');
 const statusEl = document.getElementById('status');
+const warningEl = document.getElementById('warning');
 const outputEl = document.getElementById('output');
 const typeSelect = document.getElementById('typeSelect');
 const lengthSelect = document.getElementById('lengthSelect');
@@ -14,6 +15,11 @@ let currentTabUrl = null;
 
 function setStatus(msg) {
   statusEl.textContent = msg;
+}
+
+function setWarning(msg) {
+  warningEl.textContent = msg || '';
+  warningEl.style.display = msg ? 'block' : 'none';
 }
 
 // Persist the filter selections (chrome.storage.sync) so they survive the
@@ -83,8 +89,13 @@ function renderJob(job) {
   // Ignore jobs belonging to a different page
   if (!job || job.url !== currentTabUrl) {
     summarizeBtn.disabled = false;
+    setWarning(null);
     return;
   }
+
+  // The unsupported-language warning rides on the job through both the
+  // running and done states, so it survives popup reopens mid-job.
+  setWarning(job.status === 'error' ? null : job.warning);
 
   if (job.status === 'running') {
     summarizeBtn.disabled = true;
@@ -124,6 +135,7 @@ init();
 summarizeBtn.addEventListener('click', async () => {
   outputEl.textContent = '';
   copyBtn.style.display = 'none';
+  setWarning(null);
   summarizeBtn.disabled = true;
 
   try {
@@ -163,6 +175,7 @@ summarizeBtn.addEventListener('click', async () => {
         length: lengthSelect.value,
         format: formatSelect.value,
         url: tab.url,
+        tabId: tab.id,
       },
     });
 

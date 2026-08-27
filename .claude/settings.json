@@ -8,7 +8,8 @@
       "Bash(getent hosts *)",
       "Bash(curl -sv --max-time 10 https://api.github.com)",
       "Read(//etc/**)",
-      "Bash(git branch *)"
+      "Bash(git branch *)",
+      "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('src/manifest.json','utf8'\\)\\); console.log\\('all OK'\\)\")"
     ]
   }
 }

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/valeriocomo/distila/compare/v1.1.1...v1.2.0) (2026-08-27)
+
+
+### Features
+
+* auto-detect summary output language ([#25](https://github.com/valeriocomo/distila/issues/25)) ([00d3a1b](https://github.com/valeriocomo/distila/commit/00d3a1bf2741e27d26b68e2aaba0026f935f96c6))
+
 ## [1.1.1](https://github.com/valeriocomo/distila/compare/v1.1.0...v1.1.1) (2026-08-12)
 
 

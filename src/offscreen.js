@@ -1,9 +1,9 @@
 /**
  * Offscreen document: runs the summarization pipeline. It lives here (not in
- * the popup) so the job survives the popup being closed, and not in the
+ * the side panel) so the job survives the panel being closed, and not in the
  * service worker because the Summarizer API requires a document context.
- * Progress and results are written to chrome.storage.session under the "job"
- * key; the popup renders from there.
+ * Progress and results are written to chrome.storage.session under a
+ * "job:<tabId>" key per tab; the panel renders from there.
  */
 
 const CHUNK_SIZE = 3000; // characters, ~750 tokens per Chrome's docs
@@ -19,7 +19,8 @@ let currentJob = null;
 
 // Offscreen documents can only use chrome.runtime (messaging) — chrome.storage
 // is not available here. State is relayed to the service worker, which
-// persists it to chrome.storage.session for the popup.
+// persists it to chrome.storage.session for the panel. Every job carries its
+// tabId, which selects the storage key.
 async function setJob(job) {
   currentJob = job;
   await chrome.runtime.sendMessage({ target: 'background', action: 'job-update', job });
@@ -187,18 +188,34 @@ async function recursiveSummaryOfSummaries(chunks, onProgress, outputLanguage) {
   }
 }
 
+/**
+ * Stores the running state before acking the start request, so by the time
+ * the panel gets the reply its view already shows the job (no gap in which a
+ * second click could slip through), then runs the pipeline.
+ */
+async function startJob(payload, sendResponse) {
+  const { type, length, format = 'markdown', url, tabId } = payload;
+  try {
+    await setJob({
+      status: 'running',
+      progress: 'Starting...',
+      tabId,
+      url,
+      type,
+      length,
+      format,
+      startedAt: Date.now(),
+    });
+  } catch (err) {
+    sendResponse({ ok: false, error: err.message || String(err) });
+    return;
+  }
+  sendResponse({ ok: true });
+  await runJob(payload);
+}
+
 async function runJob({ articleText, type, length, format = 'markdown', url, tabId, detectedLanguage }) {
   const onProgress = (msg) => updateJob({ progress: msg });
-
-  await setJob({
-    status: 'running',
-    progress: 'Starting...',
-    url,
-    type,
-    length,
-    format,
-    startedAt: Date.now(),
-  });
 
   try {
     if (!('Summarizer' in self)) {
@@ -315,13 +332,13 @@ async function runJob({ articleText, type, length, format = 'markdown', url, tab
         }
       }
 
-      await setJob({ status: 'done', summary: finalSummary, warning, url, type, length, format });
+      await setJob({ status: 'done', summary: finalSummary, warning, tabId, url, type, length, format });
     } finally {
       finalSummarizer.destroy();
     }
   } catch (err) {
     console.error(err);
-    await setJob({ status: 'error', message: err.message || String(err), url });
+    await setJob({ status: 'error', message: err.message || String(err), tabId, url });
   }
 }
 
@@ -329,13 +346,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.target !== 'offscreen') return;
 
   if (message.action === 'start-summarization') {
-    // Ack right away: the service worker awaits this send, and an awaited
+    // One job at a time (Gemini Nano): report busy instead of dropping the
+    // request silently, so the panel of another tab can tell the user. Every
+    // path must ack: the service worker awaits this send, and an awaited
     // sendMessage rejects if no listener ever calls sendResponse.
-    sendResponse({ ok: true });
-    if (jobRunning) return; // one job at a time; the popup already shows the running state
+    if (jobRunning) {
+      sendResponse({ ok: false, busy: true });
+      return;
+    }
     jobRunning = true;
-    runJob(message.payload).finally(() => {
+    startJob(message.payload, sendResponse).finally(() => {
       jobRunning = false;
     });
+    return true; // startJob acks asynchronously
   }
 });

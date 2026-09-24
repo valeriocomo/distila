@@ -96,7 +96,7 @@
     <img src="icon128.png" alt="Distila logo">
     <div>
       <h1>Distila — Privacy Policy</h1>
-      <p>Last updated: July 6, 2026</p>
+      <p>Last updated: September 24, 2026</p>
     </div>
   </div>
 </header>
@@ -113,8 +113,8 @@
     Distila is a browser extension that summarizes the article on the web page you are currently
     viewing. When you click the extension icon and choose to summarize, Distila reads the visible
     text of that page and generates a summary using an on-device AI model (Gemini Nano, provided
-    by Chrome). The summary is displayed in the extension's popup, and you may optionally copy it
-    to your clipboard.
+    by Chrome). The summary is displayed in the browser's side panel (or in a popup on browsers
+    without side panel support), and you may optionally copy it to your clipboard.
   </p>
 
   <h2>Data we access</h2>
@@ -124,13 +124,26 @@
   <ul>
     <li>
       <strong><code>activeTab</code></strong> — grants temporary access to the tab you are viewing,
-      only after you explicitly click the Distila icon. Distila cannot read any tab unless you
-      interact with it first.
+      only after you explicitly click the Distila icon on that tab. The access ends when the tab
+      navigates to another website or is closed. Distila cannot read any tab unless you interact
+      with it first; opening the side panel or switching tabs does not grant access to other tabs.
     </li>
     <li>
       <strong><code>scripting</code></strong> — allows Distila to extract the readable text content
       of the current page (for example, the contents of an <code>&lt;article&gt;</code> element) so
       it can be passed to the summarization model.
+    </li>
+    <li>
+      <strong><code>sidePanel</code></strong> — lets Distila show its interface in the browser's side
+      panel. It gives no access to page content.
+    </li>
+    <li>
+      <strong><code>offscreen</code></strong> — runs the summarization in a hidden extension page, so
+      it keeps going if you close the side panel. It gives no access to page content.
+    </li>
+    <li>
+      <strong><code>storage</code></strong> — keeps the summaries and your summary preferences, as
+      described under "Data storage and retention" below.
     </li>
   </ul>
   <p>
@@ -147,9 +160,14 @@
 
   <h2>Data storage and retention</h2>
   <p>
-    Distila does not store the text of the pages you summarize, nor the summaries it generates.
-    Everything exists only in memory while the popup is open and is discarded when you close it.
-    Distila does not use cookies, local storage, or any persistent tracking mechanism.
+    Distila does not store the text of the pages you summarize: it is held in memory only while the
+    summary is being generated. The generated summary, the address of the summarized page and its
+    detected language are kept in the browser's session storage (<code>chrome.storage.session</code>,
+    held in memory and never written to disk), so the side panel can show each tab's summary again
+    when you return to it. They are discarded when you close that tab or quit the browser.
+    Your summary preferences (type, length and format) are saved with
+    <code>chrome.storage.sync</code>, which your browser may sync across your devices if you use
+    browser sync. Distila does not use cookies or any tracking mechanism.
   </p>
 
   <h2>Clipboard access</h2>

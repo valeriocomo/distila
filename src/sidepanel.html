@@ -57,6 +57,17 @@
     margin-top: 8px;
     display: none;
   }
+  #cancelBtn {
+    display: none;
+    margin-top: 8px;
+    background: transparent;
+    color: light-dark(#c5221f, #f28b82);
+    border: 1px solid currentColor;
+  }
+  #cancelBtn:disabled {
+    background: transparent;
+    color: #9aa0a6;
+  }
   #status {
     font-size: 12px;
     color: #555;
@@ -112,11 +123,13 @@
   </div>
 
   <button id="summarizeBtn">Summarize article</button>
+  <button id="cancelBtn">Cancel</button>
   <div id="status" aria-live="polite"></div>
   <div id="warning"></div>
   <div id="output"></div>
   <button id="copyBtn">Copy summary</button>
 
+  <script src="common.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

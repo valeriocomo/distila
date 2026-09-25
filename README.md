@@ -18,6 +18,7 @@ project/
 │   ├── manifest.json
 │   ├── sidepanel.html          ← side panel UI (also the popup fallback)
 │   ├── sidepanel.js
+│   ├── common.js               ← helpers shared by the panel and the service worker
 │   ├── background.js           ← coordinator service worker
 │   ├── offscreen.html
 │   ├── offscreen.js            ← summarization pipeline (offscreen document)
@@ -64,7 +65,10 @@ The panel stays open while you browse and follows the active tab:
 
 - Each tab keeps its latest summary until the tab is closed or you summarize another page in it (navigating to another page hides it; going back shows it again)
 - Distila can only read a tab after you click its icon on that tab (`activeTab`): on a tab you switched to, or after navigating to another site, the panel asks you to click the icon again
-- One summary runs at a time: while it runs, tabs without a summary show that Distila is busy, and starting another one tells you to wait
+- Summaries run one at a time, in a **queue**: start as many as you like on different tabs and each waits its turn. The panel shows a queued tab's position ("Queued (#2)"), and tabs without a summary of their own show how many are waiting
+- **Cancel** stops a queued or running summary. Closing a tab cancels its summary too, and summarizing another page in the same tab replaces that tab's queued or running one
+- If you navigate away while a tab's summary is queued or running, it is still completed for the page it was started on (going back shows it)
+- The toolbar icon shows each tab's state on a badge, with a tooltip: `…` summarizing, `#2` queued, `✓` summary ready, `!` failed
 - Clicking the icon doesn't close the panel: use the panel's close button (or "Close side panel" in the icon's right-click menu)
 
 ## How it works
@@ -76,7 +80,9 @@ The panel stays open while you browse and follows the active tab:
 - If the language is **not** supported, a notice is shown in the panel and the **Translator API** kicks in: the article is translated to English (chunk by chunk), summarized in English, and the summary is translated back to the detected language. If the translation pair isn't available, the extension still summarizes in English and keeps the notice
 - If the text is very long, the **"summary of summaries"** technique is applied: the text is split into ~3000-character chunks, each chunk is summarized individually (`tldr` type, `plain-text`, `long`), the partial summaries are concatenated and, if needed, recursively re-compressed
 - The final summary is generated using the options chosen by the user (`type`, `length`, `format`)
-- Job progress/results are relayed back to the service worker and stored in `chrome.storage.session`, one `job:<tabId>` key per tab (dropped when the tab closes); the panel renders the active tab's job from there and re-syncs on tab switches, navigations and `chrome.storage.onChanged`. The offscreen document runs one job at a time and answers "busy" to further requests
+- The offscreen document keeps a **FIFO queue** in memory and runs one job at a time (the extracted text never leaves it). Cancelling aborts the job's `AbortSignal` (passed to every `create()`/`summarize()`/`translate()`/`detect()` call) and destroys its model sessions, so the next job starts right away
+- Job state (queued with its position, running with its progress, done, error) is relayed back to the service worker and stored in `chrome.storage.session`, one `job:<tabId>` key per tab (dropped when the tab closes); the panel renders the active tab's job from there and re-syncs on tab switches, navigations and `chrome.storage.onChanged`
+- The service worker mirrors each tab's job on the toolbar badge (`chrome.action.setBadgeText` per tab). Chrome clears per-tab badges on every navigation, so the badge is re-applied from storage when a page loads, only while the tab shows the job's page and Distila can read it (after a round trip through another site, the badge comes back with the next click on the icon)
 - On browsers without the `chrome.sidePanel` API the same page is used as the action popup (`sidepanel.html?mode=popup`, set at runtime by the service worker)
 - The "Copy" button uses `navigator.clipboard.writeText()`
 

@@ -96,7 +96,7 @@
     <img src="icon128.png" alt="Distila logo">
     <div>
       <h1>Distila — Privacy Policy</h1>
-      <p>Last updated: September 24, 2026</p>
+      <p>Last updated: September 25, 2026</p>
     </div>
   </div>
 </header>
@@ -161,7 +161,8 @@
   <h2>Data storage and retention</h2>
   <p>
     Distila does not store the text of the pages you summarize: it is held in memory only while the
-    summary is being generated. The generated summary, the address of the summarized page and its
+    summary is waiting in Distila's queue or being generated, and it is discarded as soon as the
+    summary is done, cancelled, or its tab is closed. The generated summary, the address of the summarized page and its
     detected language are kept in the browser's session storage (<code>chrome.storage.session</code>,
     held in memory and never written to disk), so the side panel can show each tab's summary again
     when you return to it. They are discarded when you close that tab or quit the browser.

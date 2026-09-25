@@ -1,4 +1,5 @@
 const summarizeBtn = document.getElementById('summarizeBtn');
+const cancelBtn = document.getElementById('cancelBtn');
 const copyBtn = document.getElementById('copyBtn');
 const statusEl = document.getElementById('status');
 const warningEl = document.getElementById('warning');
@@ -8,10 +9,11 @@ const lengthSelect = document.getElementById('lengthSelect');
 const formatSelect = document.getElementById('formatSelect');
 
 // The panel is only a view: the summarization runs in the offscreen document
-// (see offscreen.js) so it survives the panel closing and tab switches. The
-// panel follows the active tab of its window and renders that tab's job from
-// chrome.storage.session, re-syncing whenever the tab, its page or the stored
-// jobs change. On browsers without the side panel API the same page is the
+// (see offscreen.js), which queues jobs and survives the panel closing and
+// tab switches. The panel follows the active tab of its window and renders
+// that tab's job from chrome.storage.session, re-syncing whenever the tab,
+// its page or the stored jobs change. jobKey/samePage/isActiveJob come from
+// common.js. On browsers without the side panel API the same page is the
 // action popup (sidepanel.html?mode=popup, set by background.js).
 const IS_POPUP = new URLSearchParams(location.search).get('mode') === 'popup';
 document.body.classList.toggle('popup', IS_POPUP);
@@ -19,36 +21,28 @@ document.body.classList.toggle('popup', IS_POPUP);
 const ACCESS_HINT = 'Click the Distila icon in the toolbar (or in the Extensions menu) to use Distila on this page.';
 const RESTRICTED_MSG = "Distila can't summarize this page.";
 const FILE_ACCESS_MSG = 'To summarize local files, turn on "Allow access to file URLs" for Distila in chrome://extensions.';
-const BUSY_MSG = 'Distila is busy with another page: it summarizes one page at a time. Try again when it is done.';
-const BUSY_ELSEWHERE_MSG = 'Distila is summarizing another page...';
 const ERROR_PAGE_MSG = "This page didn't load. Reload it and try again.";
 const COPY_LABEL = 'Copy summary';
 
-const jobKey = (tabId) => `job:${tabId}`;
+const queuedMsg = (position) => `Queued (#${position}): Distila is summarizing another page first.`;
 
-// Page identity for matching a stored job to the tab: the #fragment is
-// ignored (in-page anchors must not hide the summary) unless it looks like a
-// hash-router path (#/... or #!...), where it names a different page.
-function pageKey(url) {
-  const hash = url.indexOf('#');
-  if (hash === -1) return url;
-  const fragment = url.slice(hash + 1);
-  return fragment.startsWith('/') || fragment.startsWith('!') ? url : url.slice(0, hash);
+// Hint for a tab without its own job while others are queued or running
+function activeElsewhereMsg(count) {
+  const waiting = count - 1;
+  return `Distila is summarizing another page${waiting > 0 ? ` (${waiting} waiting)` : ''}...`;
 }
 
-function samePage(a, b) {
-  return !!a && !!b && pageKey(a) === pageKey(b);
-}
-
-// What the panel shows: the active tab of this window and its job.
-const view = { windowId: null, tabId: null, url: null, job: null, busyElsewhere: false };
-// Tabs with a click in flight (extraction and hand-off), and the per-tab
-// outcome of the last click when it didn't start a job (busy, extraction
-// errors) — neither is part of any stored job. Busy notices are dropped as
-// soon as a job ends (see storage.onChanged).
+// What the panel shows: the active tab of this window, its job, and how many
+// other jobs are queued or running.
+const view = { windowId: null, tabId: null, url: null, job: null, activeElsewhere: 0 };
+// Tabs with a click in flight (extraction and hand-off, or a cancel), and the
+// per-tab outcome of the last click when it changed no stored job
+// (extraction errors, "Cancelled.") — none of them is part of a stored job.
 const starting = new Set();
-const notices = new Map(); // tabId -> { url, text, busy }
+const cancelling = new Set();
+const notices = new Map(); // tabId -> { url, text }
 let refreshSeq = 0;
+let refreshesInFlight = 0;
 let copyTimer = null;
 
 const ready = chrome.windows.getCurrent().then((win) => {
@@ -136,11 +130,17 @@ function extractArticleText() {
  */
 async function refresh() {
   const seq = ++refreshSeq;
-  await ready;
-  const [[tab], stored] = await Promise.all([
-    chrome.tabs.query({ active: true, windowId: view.windowId }),
-    chrome.storage.session.get(null),
-  ]);
+  let tab, stored;
+  refreshesInFlight++;
+  try {
+    await ready;
+    [[tab], stored] = await Promise.all([
+      chrome.tabs.query({ active: true, windowId: view.windowId }),
+      chrome.storage.session.get(null),
+    ]);
+  } finally {
+    refreshesInFlight--;
+  }
   if (seq !== refreshSeq) return;
 
   view.tabId = tab?.id ?? null;
@@ -151,9 +151,11 @@ async function refresh() {
   // shows up again on Back) until it is replaced or the tab is closed.
   const job = view.tabId != null ? stored[jobKey(view.tabId)] : undefined;
   view.job = job && samePage(job.url, view.url) ? job : null;
-  view.busyElsewhere = Object.entries(stored).some(
-    ([key, j]) => key.startsWith('job:') && j?.status === 'running' && j !== view.job,
-  );
+  // Includes this tab's own job for a page it navigated away from: it is
+  // "another page" too.
+  view.activeElsewhere = Object.entries(stored).filter(
+    ([key, j]) => key.startsWith('job:') && isActiveJob(j) && j !== view.job,
+  ).length;
   render();
 }
 
@@ -167,6 +169,7 @@ function render() {
   let output = '';
   let status = '';
   let canStart = true;
+  let canCancel = false;
 
   if (!url) {
     status = ACCESS_HINT;
@@ -180,14 +183,19 @@ function render() {
   } else if (job?.status === 'running') {
     status = job.progress || 'Summarizing...';
     canStart = false;
+    canCancel = true;
+  } else if (job?.status === 'queued') {
+    status = queuedMsg(job.position);
+    canStart = false;
+    canCancel = true;
   } else {
     if (job?.status === 'done') {
       output = job.summary;
       status = 'Done.';
     } else if (job?.status === 'error') {
       status = `Error: ${job.message}`;
-    } else if (view.busyElsewhere) {
-      status = BUSY_ELSEWHERE_MSG;
+    } else if (view.activeElsewhere) {
+      status = activeElsewhereMsg(view.activeElsewhere);
     }
     // The last click on this page didn't start a job (it left the stored
     // state as it was): its outcome wins over that state.
@@ -201,6 +209,10 @@ function render() {
   if (outputEl.textContent !== output) outputEl.textContent = output;
   copyBtn.style.display = output ? 'block' : 'none';
   summarizeBtn.disabled = !canStart;
+  // Hiding the focused Cancel would drop keyboard focus to the page body
+  if (!canCancel && document.activeElement === cancelBtn) summarizeBtn.focus();
+  cancelBtn.style.display = canCancel ? 'block' : 'none';
+  cancelBtn.disabled = cancelling.has(tabId);
   setStatus(status);
 }
 
@@ -241,21 +253,15 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
   if (area !== 'session') return;
 
-  let relevant = false;
-  for (const [key, { oldValue, newValue }] of Object.entries(changes)) {
-    if (!key.startsWith('job:')) continue;
-    const wasRunning = oldValue?.status === 'running';
-    const isRunning = newValue?.status === 'running';
-    // A job ended (or its tab closed): earlier "busy" replies are outdated.
-    if (wasRunning && !isRunning) {
-      for (const [tabId, notice] of notices) {
-        if (notice.busy) notices.delete(tabId);
-      }
-    }
-    // Progress ticks of other tabs' jobs don't change this view: only this
-    // tab's job and jobs starting or ending (the busy hint) do.
-    if (key === jobKey(view.tabId) || wasRunning !== isRunning) relevant = true;
-  }
+  // Progress ticks and queue positions of other tabs' jobs don't change this
+  // view: only this tab's job and status changes (the "waiting" hint) do.
+  // While a refresh is in flight view.tabId may be about to change and its
+  // storage snapshot may predate this change, so any job change counts.
+  const relevant = Object.entries(changes).some(
+    ([key, { oldValue, newValue }]) =>
+      key.startsWith('job:') &&
+      (refreshesInFlight > 0 || key === jobKey(view.tabId) || oldValue?.status !== newValue?.status),
+  );
   if (relevant) refresh();
 });
 
@@ -284,7 +290,7 @@ summarizeBtn.addEventListener('click', async () => {
   const { tabId } = view;
   if (tabId == null) return;
   let url = view.url;
-  const notify = (text, busy = false) => notices.set(tabId, { url, text, busy });
+  const notify = (text) => notices.set(tabId, { url, text });
 
   notices.delete(tabId);
   starting.add(tabId);
@@ -316,8 +322,8 @@ summarizeBtn.addEventListener('click', async () => {
     }
 
     // Hand the job off to the offscreen document (via the service worker) and
-    // just reflect its state: the pipeline keeps running if the panel closes.
-    // The reply arrives once the job's running state is stored.
+    // just reflect its state: the queue keeps going if the panel closes. The
+    // reply arrives once the job's queued/running state is stored.
     const response = await chrome.runtime.sendMessage({
       target: 'background',
       action: 'start-summarization',
@@ -331,9 +337,7 @@ summarizeBtn.addEventListener('click', async () => {
       },
     });
 
-    if (response?.busy) {
-      notify(BUSY_MSG, true);
-    } else if (!response?.ok) {
+    if (!response?.ok) {
       notify(`Error: ${response?.error || 'could not start the summarization.'}`);
     }
   } catch (err) {
@@ -342,6 +346,33 @@ summarizeBtn.addEventListener('click', async () => {
   } finally {
     starting.delete(tabId);
     await refresh();
+  }
+});
+
+cancelBtn.addEventListener('click', async () => {
+  // Pin the job on screen: the user may switch tabs before the reply
+  const { tabId, job } = view;
+  if (tabId == null || !isActiveJob(job)) return;
+  // Disabling the focused button below drops its focus, so remember it here
+  const hadFocus = document.activeElement === cancelBtn;
+
+  cancelling.add(tabId);
+  render();
+  try {
+    const response = await chrome.runtime.sendMessage({
+      target: 'background',
+      action: 'cancel-job',
+      tabId,
+      jobId: job.jobId,
+    });
+    if (response?.cancelled) notices.set(tabId, { url: job.url, text: 'Cancelled.' });
+  } catch (err) {
+    console.error(err);
+    notices.set(tabId, { url: job.url, text: `Error: ${err.message || err}` });
+  } finally {
+    cancelling.delete(tabId);
+    await refresh();
+    if (hadFocus) (cancelBtn.style.display === 'none' ? summarizeBtn : cancelBtn).focus();
   }
 });
 

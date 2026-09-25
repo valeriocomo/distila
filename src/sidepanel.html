@@ -7,11 +7,22 @@
   :root {
     color-scheme: light dark;
   }
+  /* Side panel: fill the panel height, the output area takes the rest */
   body {
-    width: 360px;
+    box-sizing: border-box;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     padding: 12px;
     margin: 0;
+  }
+  /* Popup fallback (sidepanel.html?mode=popup): popups size to their content */
+  body.popup {
+    box-sizing: content-box;
+    width: 360px;
+    height: auto;
+    display: block;
   }
   h1 {
     font-size: 15px;
@@ -46,6 +57,17 @@
     margin-top: 8px;
     display: none;
   }
+  #cancelBtn {
+    display: none;
+    margin-top: 8px;
+    background: transparent;
+    color: light-dark(#c5221f, #f28b82);
+    border: 1px solid currentColor;
+  }
+  #cancelBtn:disabled {
+    background: transparent;
+    color: #9aa0a6;
+  }
   #status {
     font-size: 12px;
     color: #555;
@@ -63,10 +85,10 @@
     border: 1px solid light-dark(#f0c987, #6b5b2e);
   }
   #output {
+    flex: 1 1 auto;
     width: 100%;
     box-sizing: border-box;
     min-height: 160px;
-    max-height: 320px;
     overflow-y: auto;
     padding: 8px;
     font-size: 13px;
@@ -75,6 +97,9 @@
     border-radius: 6px;
     white-space: pre-wrap;
     background: rgba(0,0,0,0.02);
+  }
+  body.popup #output {
+    max-height: 320px;
   }
 </style>
 </head>
@@ -98,11 +123,13 @@
   </div>
 
   <button id="summarizeBtn">Summarize article</button>
-  <div id="status"></div>
+  <button id="cancelBtn">Cancel</button>
+  <div id="status" aria-live="polite"></div>
   <div id="warning"></div>
   <div id="output"></div>
   <button id="copyBtn">Copy summary</button>
 
-  <script src="popup.js"></script>
+  <script src="common.js"></script>
+  <script src="sidepanel.js"></script>
 </body>
 </html>

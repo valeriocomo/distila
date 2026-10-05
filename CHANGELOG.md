@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/valeriocomo/distila/compare/v1.2.0...v1.3.0) (2026-10-05)
+
+
+### Features
+
+* add side panel ([#27](https://github.com/valeriocomo/distila/issues/27)) ([5478fb0](https://github.com/valeriocomo/distila/commit/5478fb08dea056eb8a9fa2befda1c5af247be39d))
+
 ## [1.2.0](https://github.com/valeriocomo/distila/compare/v1.1.1...v1.2.0) (2026-08-27)
 
 

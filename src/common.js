@@ -1,7 +1,7 @@
 /**
- * Helpers shared by the service worker (background.js, via importScripts) and
- * the side panel (sidepanel.html, via <script>). This is a classic script:
- * its top-level names are globals in both contexts, so neither file may
+ * Helpers shared by the service worker (background.js, via importScripts), the
+ * side panel and the offscreen document (via <script>). This is a classic script:
+ * its top-level names are globals in every context, so no other file may
  * redeclare them.
  */
 
@@ -26,4 +26,13 @@ function samePage(a, b) {
 // Waiting in the offscreen document's queue or being summarized right now.
 function isActiveJob(job) {
   return job?.status === 'queued' || job?.status === 'running';
+}
+
+// One chrome.storage.session key per tab for the visible chat transcript.
+const chatKey = (tabId) => `chat:${tabId}`;
+
+// A chat whose model session is being prepared or that is answering: it holds
+// the on-device model, so summaries wait (and vice versa).
+function isActiveChat(chat) {
+  return chat?.status === 'preparing' || chat?.status === 'answering';
 }

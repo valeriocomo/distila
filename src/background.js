@@ -1,13 +1,14 @@
 /**
- * Minimal coordinator service worker. It cannot run the Summarizer API itself
- * (the API requires a document context), so it opens the side panel, makes
- * sure the offscreen document exists, forwards summarization and cancel
- * requests to it, persists the job state it relays back and mirrors that state
- * on the toolbar badge. This way jobs keep running (and queueing) even if the
- * panel closes or the user switches tabs.
+ * Minimal coordinator service worker. It cannot run the Summarizer or Prompt
+ * API itself (they require a document context), so it opens the side panel,
+ * makes sure the offscreen document exists, forwards summarization, chat and
+ * cancel requests to it, persists the job and chat state it relays back and
+ * mirrors the job state on the toolbar badge. This way jobs and chat answers
+ * keep running (and queueing) even if the panel closes or the user switches
+ * tabs.
  */
 
-importScripts('common.js'); // jobKey, samePage, isActiveJob
+importScripts('common.js'); // jobKey, chatKey, samePage, isActiveJob, isActiveChat
 
 const OFFSCREEN_URL = 'offscreen.html';
 const POPUP_FALLBACK_URL = 'sidepanel.html?mode=popup';
@@ -82,13 +83,13 @@ async function ensureOffscreenDocument() {
     // died and took its in-memory queue with it. (Chrome never closes a
     // DOM_PARSER offscreen document by itself; a crash or an explicit close
     // does.) Mark them before the new document gets its first job.
-    await withStorageLock(markInterruptedJobs);
+    await withStorageLock(markInterruptedState);
     await chrome.offscreen.createDocument({
       url: OFFSCREEN_URL,
       // There is no AI-specific reason in the enum; DOM_PARSER is the closest fit.
       // https://developer.chrome.com/docs/extensions/reference/api/offscreen#type-Reason
       reasons: ['DOM_PARSER'],
-      justification: 'Run the on-device Summarizer API, which requires a document context',
+      justification: 'Run the on-device Summarizer and Prompt APIs, which require a document context',
     });
   })().finally(() => {
     creatingOffscreen = null;
@@ -106,20 +107,26 @@ async function hasOffscreenDocument() {
   return contexts.length > 0;
 }
 
-// Asks the offscreen document to cancel the tab's job (only the given one
-// when jobId is set). Resolves to its reply, or null without a document.
-async function forwardCancel(tabId, jobId) {
+// Sends a message to the offscreen document only if it exists. Resolves to
+// its reply, or null without a document.
+async function forwardIfAlive(message) {
   if (!(await hasOffscreenDocument())) return null;
-  return chrome.runtime.sendMessage({ target: 'offscreen', action: 'cancel-job', tabId, jobId });
+  return chrome.runtime.sendMessage({ target: 'offscreen', ...message });
 }
 
-// Serializes every chrome.storage.session write in this worker (job keys,
-// langByTab, cleanup on tab close), so e.g. a late job update can't land
+// Asks the offscreen document to cancel the tab's job (only the given one
+// when jobId is set).
+function forwardCancel(tabId, jobId) {
+  return forwardIfAlive({ action: 'cancel-job', tabId, jobId });
+}
+
+// Serializes every chrome.storage.session write in this worker (job and chat
+// keys, langByTab, cleanup on tab close), so e.g. a late job update can't land
 // after its tab's entries were removed. Never await a message reply inside
 // it: the offscreen document's jobs-update needs the lock to be answered, and
 // start and cancel requests wait for such updates. The lock isn't reentrant
 // either: code running under it calls the unlocked helpers (writeJobs,
-// markInterruptedJobs), never the locked wrappers.
+// writeChats, markInterruptedState), never the locked wrappers.
 let storageQueue = Promise.resolve();
 function withStorageLock(fn) {
   const run = storageQueue.then(fn);
@@ -212,8 +219,49 @@ function syncBadge(tabId) {
   });
 }
 
-// Unlocked: see ensureOffscreenDocument.
-async function markInterruptedJobs() {
+/**
+ * Applies a batch of chat changes relayed by the offscreen document (unlocked:
+ * callers hold the storage lock), with the same rules as writeJobs. A chat is
+ * also dropped when its tab no longer shows its page (or the url is hidden:
+ * the activeTab grant went with a cross-origin navigation), so a late
+ * streaming snapshot can't bring back a chat checkChatPage just removed.
+ */
+async function writeChats({ chats = [], removed = [] }) {
+  const dropped = [];
+  const tabIds = [...new Set([...chats, ...removed].map((c) => c.tabId))];
+  const tabs = new Map(await Promise.all(tabIds.map(async (id) => [id, await getTab(id)])));
+
+  if (removed.length) {
+    const stored = await chrome.storage.session.get(removed.map((r) => chatKey(r.tabId)));
+    const gone = removed.filter((r) => stored[chatKey(r.tabId)]?.chatId === r.chatId);
+    await chrome.storage.session.remove(gone.map((r) => chatKey(r.tabId)));
+  }
+
+  const items = {};
+  for (const chat of chats) {
+    const tab = tabs.get(chat.tabId);
+    if (tab?.url && samePage(tab.url, chat.url)) items[chatKey(chat.tabId)] = chat;
+    else dropped.push({ tabId: chat.tabId, chatId: chat.chatId });
+  }
+  await chrome.storage.session.set(items);
+  return dropped;
+}
+
+// A chat whose turn was cut short: the partial answer is marked as failed.
+function interruptedChat(chat) {
+  return {
+    ...chat,
+    status: 'ready',
+    progress: undefined,
+    error: 'Distila was interrupted. Ask again.',
+    restarted: true,
+    messages: (chat.messages ?? []).map((m) => (m.state === 'streaming' ? { ...m, state: 'error' } : m)),
+  };
+}
+
+// Unlocked: see ensureOffscreenDocument. Jobs and chat turns that were in
+// progress died with the previous offscreen document.
+async function markInterruptedState() {
   const stored = await chrome.storage.session.get(null);
   const jobs = Object.entries(stored)
     .filter(([key, job]) => key.startsWith('job:') && isActiveJob(job))
@@ -225,6 +273,52 @@ async function markInterruptedJobs() {
       message: 'Distila was interrupted. Try again.',
     }));
   if (jobs.length) await writeJobs({ jobs });
+
+  const chats = Object.entries(stored)
+    .filter(([key, chat]) => key.startsWith('chat:') && isActiveChat(chat))
+    .map(([key, chat]) => [key, interruptedChat(chat)]);
+  if (chats.length) await chrome.storage.session.set(Object.fromEntries(chats));
+}
+
+// Settles a preparing/answering chat the offscreen document doesn't know (its
+// document died): the recovery path for a chat stuck in the panel.
+function settleIfActiveChat(tabId, chatId) {
+  return withStorageLock(async () => {
+    const key = chatKey(tabId);
+    const { [key]: chat } = await chrome.storage.session.get(key);
+    if (!isActiveChat(chat) || (chatId != null && chat.chatId !== chatId)) return false;
+    await chrome.storage.session.set({ [key]: interruptedChat(chat) });
+    return true;
+  });
+}
+
+// "New chat" on a chat the offscreen document doesn't know: drop the stored
+// transcript.
+function removeChat(tabId, chatId) {
+  return withStorageLock(async () => {
+    const key = chatKey(tabId);
+    const { [key]: chat } = await chrome.storage.session.get(key);
+    if (!chat || (chatId != null && chat.chatId !== chatId)) return false;
+    await chrome.storage.session.remove(key);
+    return true;
+  });
+}
+
+/**
+ * One chat per tab and page: when the tab leaves the chat's page (or its url
+ * becomes hidden, which only a cross-origin navigation does), the stored
+ * transcript is removed and the offscreen session destroyed. A reload keeps it.
+ */
+function checkChatPage(tabId) {
+  return withStorageLock(async () => {
+    const key = chatKey(tabId);
+    const { [key]: chat } = await chrome.storage.session.get(key);
+    if (!chat) return null;
+    const tab = await getTab(tabId);
+    if (tab?.url && samePage(tab.url, chat.url)) return null;
+    await chrome.storage.session.remove(key);
+    return chat;
+  }).then((chat) => chat && forwardIfAlive({ action: 'chat-destroy', tabId, chatId: chat.chatId }));
 }
 
 // Removes a queued/running job the offscreen document doesn't know (its
@@ -294,6 +388,74 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  // Chat state relayed by the offscreen document, stored like jobs-update.
+  if (message.action === 'chats-update') {
+    withStorageLock(() => writeChats(message))
+      .then(
+        (dropped) => sendResponse({ ok: true, dropped }),
+        (err) => {
+          console.error(err);
+          sendResponse({ ok: true, dropped: [] });
+        },
+      );
+    return true;
+  }
+
+  // A question from the panel. The offscreen document gets the cached
+  // language, the page's finished summary (fixed context for long articles)
+  // and the stored transcript (shown again if it lost the chat). Like
+  // start-summarization, the reply comes once the new state is stored, so
+  // this must not hold the storage lock.
+  if (message.action === 'chat-ask') {
+    (async () => {
+      const { tabId, url } = message.payload;
+      try {
+        await ensureOffscreenDocument();
+        const stored = await chrome.storage.session.get(['langByTab', jobKey(tabId), chatKey(tabId)]);
+        const lang = stored.langByTab?.[String(tabId)];
+        const job = stored[jobKey(tabId)];
+        const chat = stored[chatKey(tabId)];
+        const response = await chrome.runtime.sendMessage({
+          target: 'offscreen',
+          action: 'chat-ask',
+          payload: {
+            ...message.payload,
+            detectedLanguage: lang && lang.url === url ? lang.language : undefined,
+            overview: job?.status === 'done' && samePage(job.url, url) ? job.summary : undefined,
+            transcript: chat && samePage(chat.url, url) ? chat.messages : undefined,
+          },
+        });
+        sendResponse(response ?? { ok: false, error: 'The chat did not respond.' });
+      } catch (err) {
+        console.error(err);
+        sendResponse({ ok: false, error: err.message || String(err) });
+      }
+    })();
+    return true;
+  }
+
+  // Stop / "New chat" from the panel. Not under the storage lock (the reply
+  // waits for the offscreen document's chats-update). If the document
+  // doesn't know the chat, the stored state is fixed here instead.
+  if (message.action === 'chat-cancel' || message.action === 'chat-reset') {
+    (async () => {
+      const { action, tabId, chatId } = message;
+      let done = false;
+      try {
+        const reply = await forwardIfAlive({ action, tabId, chatId });
+        done = action === 'chat-cancel' ? reply?.cancelled === true : reply?.reset === true;
+      } catch (err) {
+        console.error(err);
+      }
+      if (!done) {
+        const fix = action === 'chat-cancel' ? settleIfActiveChat : removeChat;
+        done = await fix(tabId, chatId).catch(() => false);
+      }
+      sendResponse({ ok: true, [action === 'chat-cancel' ? 'cancelled' : 'reset']: done });
+    })();
+    return true;
+  }
+
   if (message.action === 'start-summarization') {
     (async () => {
       const { tabId, url } = message.payload;
@@ -324,14 +486,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 });
 
-// "One summary per tab, detected language once per page": drop a tab's job
-// and cached language when it goes away, and cancel the job if it is still
-// queued or running so it doesn't hold up the queue. (chrome.storage.session
-// itself only survives until the browser closes.)
+// "One summary and one chat per tab, detected language once per page": drop
+// a tab's job, chat and cached language when it goes away, cancel the job if
+// it is still queued or running so it doesn't hold up the queue, and destroy
+// the chat's model sessions. (chrome.storage.session itself only survives
+// until the browser closes.)
 chrome.tabs.onRemoved.addListener((tabId) => {
   forwardCancel(tabId).catch(() => {});
+  forwardIfAlive({ action: 'chat-destroy', tabId }).catch(() => {});
   withStorageLock(async () => {
-    await chrome.storage.session.remove(jobKey(tabId));
+    await chrome.storage.session.remove([jobKey(tabId), chatKey(tabId)]);
     const { langByTab = {} } = await chrome.storage.session.get('langByTab');
     if (String(tabId) in langByTab) {
       delete langByTab[String(tabId)];
@@ -347,5 +511,10 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status === 'complete' || changeInfo.url) {
     syncBadge(tabId).catch(console.error);
+  }
+  // A navigation may leave the chat's page (checked on every load step: the
+  // url may still be the old one when the load starts).
+  if (changeInfo.status || changeInfo.url) {
+    checkChatPage(tabId).catch(console.error);
   }
 });

@@ -28,6 +28,43 @@
     font-size: 15px;
     margin: 0 0 10px;
   }
+  [hidden] {
+    display: none !important;
+  }
+  /* Tabs: Chat | Summary. Each panel fills the remaining height. */
+  .tabs {
+    display: flex;
+    margin-bottom: 10px;
+    border-bottom: 1px solid light-dark(#dadce0, #5f6368);
+  }
+  .tabs button[role="tab"] {
+    flex: 1;
+    width: auto;
+    padding: 6px 8px;
+    background: transparent;
+    color: inherit;
+    border-radius: 0;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+  }
+  .tabs button[role="tab"][aria-selected="true"] {
+    color: light-dark(#1a73e8, #8ab4f8);
+    border-bottom-color: currentColor;
+    font-weight: 600;
+  }
+  .tabs button[role="tab"]:focus-visible {
+    outline: 2px solid light-dark(#1a73e8, #8ab4f8);
+    outline-offset: -2px;
+  }
+  [role="tabpanel"] {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  body.popup [role="tabpanel"] {
+    display: block;
+  }
   .row {
     display: flex;
     gap: 8px;
@@ -57,24 +94,24 @@
     margin-top: 8px;
     display: none;
   }
-  #cancelBtn {
+  #cancelBtn, #stopBtn {
     display: none;
     margin-top: 8px;
     background: transparent;
     color: light-dark(#c5221f, #f28b82);
     border: 1px solid currentColor;
   }
-  #cancelBtn:disabled {
+  #cancelBtn:disabled, #stopBtn:disabled {
     background: transparent;
     color: #9aa0a6;
   }
-  #status {
+  #status, #chatStatus {
     font-size: 12px;
     color: #555;
     margin: 8px 0;
     min-height: 16px;
   }
-  #warning {
+  #warning, #chatWarning {
     display: none;
     font-size: 12px;
     padding: 6px 8px;
@@ -98,36 +135,133 @@
     white-space: pre-wrap;
     background: rgba(0,0,0,0.02);
   }
-  body.popup #output {
+  body.popup #output, body.popup #chatLog {
     max-height: 320px;
+  }
+  /* Chat */
+  #chatLog {
+    flex: 1 1 auto;
+    min-height: 160px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+    box-sizing: border-box;
+    font-size: 13px;
+    line-height: 1.4;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    background: rgba(0,0,0,0.02);
+  }
+  .msg {
+    max-width: 85%;
+    padding: 6px 10px;
+    border-radius: 12px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .msg.user {
+    align-self: flex-end;
+    background: #1a73e8;
+    color: white;
+    border-bottom-right-radius: 4px;
+  }
+  .msg.assistant {
+    align-self: flex-start;
+    background: light-dark(#f1f3f4, #3c4043);
+    border-bottom-left-radius: 4px;
+  }
+  .msg.streaming .msg-text:empty::before {
+    content: "…";
+  }
+  .msg-note {
+    display: block;
+    font-size: 11px;
+    font-style: italic;
+    opacity: 0.75;
+  }
+  .msg-note:empty {
+    display: none;
+  }
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  #chatInput {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    margin: 8px 0;
+    padding: 6px 8px;
+    font: inherit;
+    font-size: 13px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    resize: vertical;
+  }
+  #resetBtn {
+    width: auto;
+    margin-top: 6px;
+    padding: 2px 0;
+    font-size: 12px;
+    background: transparent;
+    color: light-dark(#1a73e8, #8ab4f8);
+  }
+  #resetBtn:disabled {
+    background: transparent;
+    color: #9aa0a6;
   }
 </style>
 </head>
 <body>
   <h1>Distila</h1>
 
-  <div class="row">
-    <select id="typeSelect">
-      <option value="key-points" selected>Key points</option>
-      <option value="tldr">TL;DR</option>
-    </select>
-    <select id="lengthSelect">
-      <option value="short" selected>Short</option>
-      <option value="medium">Medium</option>
-      <option value="long">Long</option>
-    </select>
-    <select id="formatSelect">
-      <option value="markdown" selected>Markdown</option>
-      <option value="plain-text">Plain text</option>
-    </select>
+  <div class="tabs" role="tablist" aria-label="Distila">
+    <button id="chatTab" type="button" role="tab" aria-controls="chatPanel" aria-selected="true">Chat</button>
+    <button id="summaryTab" type="button" role="tab" aria-controls="summaryPanel" aria-selected="false" tabindex="-1">Summary</button>
   </div>
 
-  <button id="summarizeBtn">Summarize article</button>
-  <button id="cancelBtn">Cancel</button>
-  <div id="status" aria-live="polite"></div>
-  <div id="warning"></div>
-  <div id="output"></div>
-  <button id="copyBtn">Copy summary</button>
+  <section id="chatPanel" role="tabpanel" aria-labelledby="chatTab">
+    <div id="chatStatus" aria-live="polite"></div>
+    <div id="chatWarning"></div>
+    <div id="chatLog" aria-label="Conversation"></div>
+    <form id="chatForm">
+      <textarea id="chatInput" rows="2" maxlength="2000" placeholder="Ask about this page… (Enter to send, Shift+Enter for a new line)" aria-label="Question"></textarea>
+      <button id="askBtn" type="submit">Ask</button>
+      <button id="stopBtn" type="button">Stop</button>
+      <button id="resetBtn" type="button">New chat</button>
+    </form>
+  </section>
+
+  <section id="summaryPanel" role="tabpanel" aria-labelledby="summaryTab" hidden>
+    <div class="row">
+      <select id="typeSelect">
+        <option value="key-points" selected>Key points</option>
+        <option value="tldr">TL;DR</option>
+      </select>
+      <select id="lengthSelect">
+        <option value="short" selected>Short</option>
+        <option value="medium">Medium</option>
+        <option value="long">Long</option>
+      </select>
+      <select id="formatSelect">
+        <option value="markdown" selected>Markdown</option>
+        <option value="plain-text">Plain text</option>
+      </select>
+    </div>
+
+    <button id="summarizeBtn">Summarize article</button>
+    <button id="cancelBtn">Cancel</button>
+    <div id="status" aria-live="polite"></div>
+    <div id="warning"></div>
+    <div id="output"></div>
+    <button id="copyBtn">Copy summary</button>
+  </section>
 
   <script src="common.js"></script>
   <script src="sidepanel.js"></script>

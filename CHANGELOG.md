@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/valeriocomo/distila/compare/v1.3.0...v1.4.0) (2026-11-18)
+
+
+### Features
+
+* add query document ([#29](https://github.com/valeriocomo/distila/issues/29)) ([d789326](https://github.com/valeriocomo/distila/commit/d7893260a1a1da8c02cf45f319c3facc4fa30d27))
+
 ## [1.3.0](https://github.com/valeriocomo/distila/compare/v1.2.0...v1.3.0) (2026-10-05)
 
 

@@ -542,6 +542,9 @@ const OVERVIEW_MAX_CHARS = 1500;
 // skip measuring them.
 const MAX_CHARS_PER_TOKEN = 4;
 const MAX_CHAT_SESSIONS = 3; // live base sessions (LRU), they hold model memory
+const MAX_QUESTION_TRANSLATORS = 4; // per chat (LRU); a turn uses at most 3
+// Questions are short: the detector is less confident on them than on articles
+const QUESTION_CONFIDENCE_THRESHOLD = 0.3;
 const MAX_CHAT_TURNS = 20; // Q/A pairs remembered for replays
 const MAX_STORED_MESSAGES = 100; // visible transcript kept in storage
 const CHAT_PUBLISH_INTERVAL = 120; // ms between streaming snapshots
@@ -586,32 +589,42 @@ function languageName(code) {
   }
 }
 
-function chatModelOptions(language) {
+// `languages`: those the article and the questions may come in and the
+// answers may go out in (the instructions are always in English).
+function chatModelOptions(languages) {
   return {
-    // The instructions are in English, the article/question in `language`
-    expectedInputs: [{ type: 'text', languages: language === 'en' ? ['en'] : [language, 'en'] }],
-    expectedOutputs: [{ type: 'text', languages: [language] }],
+    expectedInputs: [{ type: 'text', languages: [...new Set([...languages, 'en'])] }],
+    expectedOutputs: [{ type: 'text', languages }],
   };
 }
 
-async function chatModelAvailability(language) {
+async function chatModelAvailability(languages) {
   try {
-    return await LanguageModel.availability(chatModelOptions(language));
+    return await LanguageModel.availability(chatModelOptions(languages));
   } catch (err) {
     console.error('LanguageModel.availability failed', err);
     return 'unavailable';
   }
 }
 
-function chatInstructions(language) {
+// The answer language is not here: it changes with every question, and the
+// base session (which already read the article) must not be rebuilt for it.
+function chatInstructions() {
   return [
     'You are Distila, an assistant that answers questions about one web page article.',
     'Answer only from the article text or the article excerpts you are given; never use outside knowledge.',
     'If the answer is not in the text, say that the article does not say.',
     'Be concise and answer in plain text, without markdown.',
-    `Always answer in ${languageName(language)}.`,
   ].join('\n');
 }
+
+// Appended after every question: the end of the prompt weighs the most, so a
+// small model is less tempted to drift into the article's language.
+function answerInstruction(language) {
+  return `\n\nAnswer in ${languageName(language)}.`;
+}
+
+const baseLanguage = (tag) => String(tag).split('-')[0].toLowerCase();
 
 // --- BM25 over the article chunks (retrieval mode) ---
 
@@ -757,12 +770,13 @@ function dropConversation(chat) {
 // Frees the chat's model memory; its transcript and Q/A turns are kept, and
 // the next question prepares it again (the panel always sends the text).
 function destroyChatSessions(chat) {
-  for (const session of [chat.conv, chat.base, chat.translators?.toEn, chat.translators?.fromEn]) {
+  for (const session of [chat.conv, chat.base, chat.translators?.toEn, ...chat.questionTranslators.values()]) {
     session?.destroy();
   }
   chat.conv = null;
   chat.base = null;
   chat.translators = null;
+  chat.questionTranslators.clear();
   chat.chunks = null;
   chat.index = null;
   chat.translatedChunks = new Map();
@@ -817,16 +831,20 @@ function startChatTurn(payload) {
       id,
       tabId,
       url,
-      language: null,
+      language: null, // the article's (detected once)
+      chatLanguages: [], // those the model reads and writes natively
+      articleWarning: undefined,
+      questionLanguage: null, // the last question's, for short follow-ups
       mode: null,
       base: null,
       conv: null,
       convPrefix: '',
-      translators: null,
+      translators: null, // { toEn }: the article's, when the model reads it in English
+      questionTranslators: new Map(), // "it>en" -> Translator (LRU)
       chunks: null,
       index: null,
       translatedChunks: new Map(),
-      turns: [], // { question (as asked), q, a (in the model's language) }
+      turns: [], // { question (as asked), q, a (in the model's language), query (in the article's) }
       op: null,
       lastUsed: 0,
       state: { chatId: id, tabId, url, status: 'ready', messages: transcript, restarted: transcript.length > 0 },
@@ -910,7 +928,14 @@ function resetChat(tabId, chatId) {
   dropConversation(chat);
   chat.convPrefix = '';
   chat.turns = [];
-  patchChat(chat, { messages: [], trimmed: false, restarted: false, error: undefined }, { now: true });
+  chat.questionLanguage = null;
+  patchChat(chat, {
+    messages: [],
+    trimmed: false,
+    restarted: false,
+    error: undefined,
+    warning: chat.articleWarning,
+  }, { now: true });
   return true;
 }
 
@@ -930,46 +955,49 @@ async function prepareChat(chat, op, { articleText, detectedLanguage, overview }
     }
   }
   chat.language = language;
-  const base = language ? language.split('-')[0].toLowerCase() : 'en';
+  const base = language ? baseLanguage(language) : 'en';
 
-  // Unsupported language: the model works in English, the article, questions
-  // and answers are translated. Without a translator pair it answers in English.
-  let modelLanguage = 'en';
-  let warning;
-  let toEn = null;
-  let fromEn = null;
-  const englishOnly = () => {
-    toEn?.destroy();
-    fromEn?.destroy();
-    toEn = fromEn = null;
-    warning = `Language "${base}" is not supported by the chat model — answers are in English and may contain errors.`;
-  };
-  if (base !== 'en') {
-    if (CHAT_LANGUAGES.includes(base) && (await chatModelAvailability(base)) !== 'unavailable') {
-      modelLanguage = base;
-    } else {
-      try {
-        toEn = await createTranslator(language, 'en', ctx);
-        fromEn = toEn && (await createTranslator('en', language, ctx));
-      } catch (err) {
-        if (signal.aborted) throw err;
-        console.error('Chat translators unavailable', err);
-      }
-      if (toEn && fromEn) {
-        warning = `Language "${base}" is not supported by the chat model — questions and answers are translated and may contain errors.`;
-      } else {
-        englishOnly();
-      }
-    }
+  // The languages the model handles natively: the article is read in one of
+  // them, each answer is written in one of them (see answerQuestion).
+  const available = [];
+  for (const lang of CHAT_LANGUAGES) {
+    if ((await chatModelAvailability([lang])) !== 'unavailable') available.push(lang);
   }
-  setChatState(chat, op, { warning });
-
-  if ((await chatModelAvailability(modelLanguage)) === 'unavailable') {
+  if (!available.includes('en')) {
     throw new Error('The chat model is not available on this device.');
   }
 
-  const options = chatModelOptions(modelLanguage);
-  const instructions = chatInstructions(modelLanguage);
+  // Article in an unsupported language: the model reads it in English
+  // (translated). Without a translator it reads it as is. The answer language
+  // is decided per question.
+  let warning;
+  let toEn = null;
+  const untranslated = () => {
+    toEn?.destroy();
+    toEn = null;
+    warning = `The article's language "${base}" is not supported by the chat model — answers may contain errors.`;
+  };
+  if (base !== 'en' && !available.includes(base)) {
+    try {
+      toEn = await createTranslator(language, 'en', ctx);
+    } catch (err) {
+      if (signal.aborted) throw err;
+      console.error('Article translator unavailable', err);
+    }
+    if (toEn) {
+      warning = `The article's language "${base}" is not supported by the chat model — it is translated, answers may contain errors.`;
+    } else {
+      untranslated();
+    }
+  }
+  chat.articleWarning = warning;
+  setChatState(chat, op, { warning });
+
+  // All the languages at once, so any question gets a native answer; fall
+  // back to English only if the device can't offer the whole set.
+  chat.chatLanguages = (await chatModelAvailability(available)) === 'unavailable' ? ['en'] : available;
+  const options = chatModelOptions(chat.chatLanguages);
+  const instructions = chatInstructions();
   const createSession = async (system) => track(await LanguageModel.create({
     ...options,
     initialPrompts: [{ role: 'system', content: system }],
@@ -1007,7 +1035,8 @@ async function prepareChat(chat, op, { articleText, detectedLanguage, overview }
       } catch (err) {
         if (signal.aborted) throw err;
         console.error('Translating the article failed', err);
-        englishOnly();
+        untranslated();
+        chat.articleWarning = warning;
         setChatState(chat, op, { warning });
       }
     }
@@ -1046,12 +1075,19 @@ async function prepareChat(chat, op, { articleText, detectedLanguage, overview }
   if (session !== probe) probe.destroy();
 
   chat.base = op.keep(session);
-  chat.translators = toEn ? { toEn: op.keep(toEn), fromEn: op.keep(fromEn) } : null;
+  chat.translators = toEn ? { toEn: op.keep(toEn) } : null;
   chat.mode = mode;
   chat.conv = null;
   chat.convPrefix = '';
   setChatState(chat, op, { mode });
-  console.info('Distila chat ready', { tabId: chat.tabId, mode, modelLanguage, contextWindow });
+  console.info('Distila chat ready', {
+    tabId: chat.tabId,
+    mode,
+    articleLanguage: base,
+    translated: !!toEn,
+    chatLanguages: chat.chatLanguages,
+    contextWindow,
+  });
 }
 
 /**
@@ -1113,10 +1149,11 @@ function formatRetrievalPrompt(excerpts, question, prefix) {
  * Picks the chunks most relevant to the question (and, at half weight, to the
  * previous one, for follow-ups) while the prompt fits its budget.
  */
-async function retrievalPrompt(chat, op, conv, question, modelQuestion, prefix) {
+async function retrievalPrompt(chat, op, conv, query, modelQuestion, prefix) {
+  const previous = chat.turns.at(-1);
   const terms = new Map();
-  for (const t of tokenize(chat.turns.at(-1)?.question ?? '')) terms.set(t, 0.5);
-  for (const t of tokenize(question)) terms.set(t, 1);
+  for (const t of tokenize(previous?.query ?? previous?.question ?? '')) terms.set(t, 0.5);
+  for (const t of tokenize(query)) terms.set(t, 1);
   let ranked = rankChunks(chat.index, terms).slice(0, MAX_RETRIEVED_CHUNKS);
   if (!ranked.length) ranked = chat.chunks.slice(0, FALLBACK_CHUNKS).map((_, i) => i);
 
@@ -1183,14 +1220,160 @@ function appendAnswer(chat, op, text) {
   publishChat(chat);
 }
 
+// --- Per-question language ---
+
+// One detector for every question of every chat (created once, kept): it is
+// never downloaded from here — the article's detection already did that.
+let questionDetector = null; // Promise<LanguageDetector | null>
+
+async function getQuestionDetector() {
+  if (!questionDetector) {
+    questionDetector = (async () => {
+      if (!('LanguageDetector' in self)) return null;
+      if ((await LanguageDetector.availability()) !== 'available') return null;
+      return LanguageDetector.create();
+    })();
+  }
+  const detector = await questionDetector.catch((err) => {
+    console.error('Question language detector unavailable', err);
+    return null;
+  });
+  if (!detector) questionDetector = null; // retried on the next question
+  return detector;
+}
+
+/**
+ * The question's base language code. Short questions ("and him?") are often
+ * undetermined: then the previous question's language, the browser's, the
+ * article's.
+ */
+async function detectQuestionLanguage(chat, op, question) {
+  try {
+    const detector = await getQuestionDetector();
+    const [top] = detector ? await detector.detect(question, { signal: op.signal }) : [];
+    if (top && top.detectedLanguage !== 'und' && top.confidence >= QUESTION_CONFIDENCE_THRESHOLD) {
+      return baseLanguage(top.detectedLanguage);
+    }
+  } catch (err) {
+    if (op.signal.aborted) throw err;
+    console.error('Question language detection failed', err);
+  }
+  const fallback = chat.questionLanguage || navigator.language || chat.language;
+  return fallback ? baseLanguage(fallback) : 'en';
+}
+
+/**
+ * A translator for the pair, or null when it's unavailable. The article's
+ * translator is reused; the others are cached per chat (LRU) and survive the
+ * turn (kept), so a conversation in one language translates without delay.
+ */
+async function getTranslator(chat, op, source, target) {
+  if (chat.translators && target === 'en' && source === baseLanguage(chat.language)) {
+    return chat.translators.toEn;
+  }
+  const cache = chat.questionTranslators;
+  const key = `${source}>${target}`;
+  const cached = cache.get(key);
+  if (cached) {
+    cache.delete(key);
+    cache.set(key, cached); // most recently used last
+    return cached;
+  }
+
+  let translator = null;
+  try {
+    translator = await createTranslator(source, target, {
+      signal: op.signal,
+      track: op.track,
+      onProgress: (progress) => setChatState(chat, op, { progress }),
+    });
+  } catch (err) {
+    if (op.signal.aborted) throw err;
+    console.error(`Translator ${key} unavailable`, err);
+  }
+  // A cancel may have destroyed it while create() was settling
+  op.signal.throwIfAborted();
+  if (!translator) return null;
+
+  cache.set(key, op.keep(translator));
+  while (cache.size > MAX_QUESTION_TRANSLATORS) {
+    const [oldest, session] = cache.entries().next().value;
+    cache.delete(oldest);
+    session.destroy();
+  }
+  return translator;
+}
+
+/**
+ * Retrieval mode: the question in the article's language, since BM25 matches
+ * words of the (untranslated) chunks. Directly or through English; the
+ * question as is when no translator is available (or the article's language
+ * is unknown).
+ */
+async function searchQuery(chat, op, { question, questionLang, modelQuestion, modelQuestionLang }) {
+  if (!chat.language) return question;
+  const articleLang = baseLanguage(chat.language);
+  if (questionLang === articleLang) return question;
+  if (modelQuestionLang === articleLang) return modelQuestion;
+
+  const { signal } = op;
+  try {
+    const direct = await getTranslator(chat, op, questionLang, articleLang);
+    if (direct) {
+      setChatState(chat, op, { progress: 'Translating the question...' });
+      return await direct.translate(question, { signal });
+    }
+    if (questionLang !== 'en' && articleLang !== 'en') {
+      const toEn = modelQuestionLang === 'en' ? null : await getTranslator(chat, op, questionLang, 'en');
+      const fromEn = (modelQuestionLang === 'en' || toEn) && (await getTranslator(chat, op, 'en', articleLang));
+      if (fromEn) {
+        setChatState(chat, op, { progress: 'Translating the question...' });
+        const english = toEn ? await toEn.translate(question, { signal }) : modelQuestion;
+        return await fromEn.translate(english, { signal });
+      }
+    }
+  } catch (err) {
+    if (signal.aborted) throw err;
+    console.error('Translating the question for retrieval failed', err);
+  }
+  return question;
+}
+
+/**
+ * Answers in the question's language: natively when the model supports it,
+ * otherwise in English translated back sentence by sentence while streaming,
+ * or in English (with a warning) when there's no translator for it.
+ */
 async function answerQuestion(chat, op, question) {
   const { signal } = op;
-  const { toEn, fromEn } = chat.translators ?? {};
+  const questionLang = await detectQuestionLanguage(chat, op, question);
+  chat.questionLanguage = questionLang;
+
   let modelQuestion = question;
-  if (toEn) {
-    setChatState(chat, op, { progress: 'Translating the question...' });
-    modelQuestion = await toEn.translate(question, { signal });
+  let modelQuestionLang = questionLang;
+  let answerLang = questionLang;
+  let fromEn = null;
+  let questionWarning;
+  if (!chat.chatLanguages.includes(questionLang)) {
+    answerLang = 'en';
+    const toEn = await getTranslator(chat, op, questionLang, 'en');
+    fromEn = toEn && (await getTranslator(chat, op, 'en', questionLang));
+    if (fromEn) {
+      setChatState(chat, op, { progress: 'Translating the question...' });
+      modelQuestion = await toEn.translate(question, { signal });
+      modelQuestionLang = 'en';
+      questionWarning = `Language "${questionLang}" is not supported by the chat model — questions and answers are translated and may contain errors.`;
+    } else {
+      questionWarning = `Language "${questionLang}" is not supported by the chat model — answers are in English.`;
+    }
   }
+  const warning = [chat.articleWarning, questionWarning].filter(Boolean).join(' ') || undefined;
+  setChatState(chat, op, { warning });
+
+  const instruction = answerInstruction(answerLang);
+  const query = chat.mode === 'context'
+    ? undefined
+    : await searchQuery(chat, op, { question, questionLang, modelQuestion, modelQuestionLang });
 
   for (let attempt = 0; ; attempt++) {
     let conv;
@@ -1202,13 +1385,13 @@ async function answerQuestion(chat, op, question) {
         chat.convPrefix = rebuilt.prefix;
       }
       conv = chat.conv;
-      prompt = chat.convPrefix + modelQuestion;
+      prompt = chat.convPrefix + modelQuestion + instruction;
     } else {
       // Fresh per question: the history holds only Q/A, never the excerpts
       const rebuilt = await rebuildConversation(chat, op);
       conv = rebuilt.conv;
       setChatState(chat, op, { progress: 'Finding relevant passages...' });
-      prompt = await retrievalPrompt(chat, op, conv, question, modelQuestion, rebuilt.prefix);
+      prompt = await retrievalPrompt(chat, op, conv, query, modelQuestion + instruction, rebuilt.prefix);
     }
     setChatState(chat, op, { progress: undefined });
 
@@ -1237,7 +1420,7 @@ async function answerQuestion(chat, op, question) {
     }
 
     chat.convPrefix = ''; // replayed once, now part of the conversation
-    chat.turns.push({ question, q: modelQuestion, a: answer });
+    chat.turns.push({ question, q: modelQuestion, a: answer, query });
     if (chat.turns.length > MAX_CHAT_TURNS) chat.turns.shift();
     return;
   }
